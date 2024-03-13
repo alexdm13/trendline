@@ -1,0 +1,767 @@
+//+----------------------------------------------------------------------------+
+//|                                                              e-TFL_v2.mq4  |
+//|                                                    Ким Игорь В. aka KimIV  |
+//|                                                       http://www.kimiv.ru  |
+//|                                                                            |
+//+----------------------------------------------------------------------------+
+#property copyright "Ким Игорь В. aka KimIV"
+#property link      "http://www.kimiv.ru"
+
+//------- Внешние параметры советника -----------------------------------------+
+extern string _P_Expert="---------- Параметры советника";
+extern string NameUpLine    = "UPLine";     // Наименование верхней линии
+extern string NameDnLine    = "DNLine";     // Наименование нижней линии
+extern bool   BuyFromUp     = False;        // Покупать от верхней линии
+extern bool   BuyFromDn     = True;         // Покупать от нижней линии
+extern int    OffsetTL      = 3;            // Смещение торгового уровня
+extern bool   SetRevStopOrd = False;        // Ставить переворотные стоп-ордера
+extern bool   ShowComment   = True;         // Показывать комментарии
+extern bool   MarketWatch   = True;         // Запросы под исполнение "Market Watch".
+extern int    Magic         = 20080320;     // Идентификатор позиций советника
+extern bool   UseSound      = True;         // Использовать звуковой сигнал
+extern string NameFileSound = "expert.wav"; // Наименование звукового файла
+
+extern string _P_Trade="---------- Параметры торговли";
+extern double Lots        = 0.1;       // Размер торгуемого лота
+extern int    StopLoss    = 30;        // Размер фиксированного стопа
+extern int    TakeProfit  = 0;         // Размер фиксированного тэйка
+extern int    Slippage    = 3;         // Проскальзывание цены
+extern int    NumberOfTry = 5;         // Количество торговых попыток
+
+//------- Глобальные переменные советника -------------------------------------+
+bool   gbDisabled   = False;           // Флаг блокировки советника
+bool   gbNoInit     = False;           // Флаг неудачной инициализации
+color  clOpenBuy    = LightBlue;       // Цвет значка открытия покупки
+color  clOpenSell   = LightCoral;      // Цвет значка открытия продажи
+color  clModifyBuy  = Aqua;            // Цвет значка модификации покупки
+color  clModifySell = Tomato;          // Цвет значка модификации продажи
+color  clCloseBuy   = Blue;            // Цвет значка закрытия покупки
+color  clCloseSell  = Red;             // Цвет значка закрытия продажи
+double gdUpPrice, gdDnPrice;           // Текущие ценовые уровни
+double gdPrevUpPrice, gdPrevDnPrice;   // Предыдущие ценовые уровни
+double gdPrevAsk, gdPrevBid;           // Предыдущие цены
+
+//------- Подключение внешних модулей -----------------------------------------+
+#include <stdlib.mqh>        // Стандартная библиотека МТ4
+//+----------------------------------------------------------------------------+
+//|                                                                            |
+//|  ПРЕДОПРЕДЕЛЁННЫЕ ФУНКЦИИ                                                  |
+//|                                                                            |
+//+----------------------------------------------------------------------------+
+//|  Функция инициализации                                                     |
+//+----------------------------------------------------------------------------+
+void init()
+  {
+   gbNoInit=False;
+   if(!IsTradeAllowed())
+     {
+      Message("Для нормальной работы советника необходимо\n"+
+              "Разрешить советнику торговать");
+      gbNoInit=True; return;
+     }
+   if(!IsLibrariesAllowed())
+     {
+      Message("Для нормальной работы советника необходимо\n"+
+              "Разрешить импорт из внешних экспертов");
+      gbNoInit=True; return;
+     }
+   if(!IsTesting())
+     {
+      if(IsExpertEnabled()) Message("Советник будет запущен следующим тиком");
+      else Message("Отжата кнопка \"Разрешить запуск советников\"");
+     }
+  }
+
+//+----------------------------------------------------------------------------+
+//|  expert deinitialization function                                          |
+//+----------------------------------------------------------------------------+
+void deinit() { if(!IsTesting()) Comment(""); }
+//+----------------------------------------------------------------------------+
+//|  expert program start function                                             |
+//+----------------------------------------------------------------------------+
+void start()
+  {
+   if(gbDisabled)
+     {
+      Message("Критическая ошибка! Советник ОСТАНОВЛЕН!"); return;
+     }
+   if(gbNoInit)
+     {
+      Message("Не удалось инициализировать советник!"); return;
+     }
+   gdUpPrice=0; gdDnPrice=0;
+   if(idPriceLevel() && gdPrevAsk!=0 && gdPrevBid!=0) ManagePositions();
+
+   if(ShowComment)
+     {
+      string st="";
+      if(gdUpPrice==0) st="Не определён верхний ценовой уровень\n";
+      else
+        {
+         if(BuyFromUp) st="Покупка от ";
+         else st="Продажа от ";
+         st=st+DoubleToStr(gdUpPrice,Digits)+"\n";
+         if(SetRevStopOrd)
+           {
+            if(BuyFromUp) st=st+"SellStop на "+DoubleToStr(gdUpPrice-StopLoss*Point,Digits)+"\n";
+            else st=st+"BuyStop на "+DoubleToStr(gdUpPrice+StopLoss*Point,Digits)+"\n";
+           }
+        }
+      if(gdDnPrice==0) st=st+"Не определён нижний ценовой уровень";
+      else
+        {
+         if(BuyFromDn) st=st+"Покупка от ";
+         else st=st+"Продажа от ";
+         st=st+DoubleToStr(gdDnPrice,Digits)+"\n";
+         if(SetRevStopOrd)
+           {
+            if(BuyFromDn) st=st+"SellStop на "+DoubleToStr(gdDnPrice-StopLoss*Point,Digits)+"\n";
+            else st=st+"BuyStop на "+DoubleToStr(gdDnPrice+StopLoss*Point,Digits)+"\n";
+           }
+        }
+      if(gdUpPrice>0 || gdDnPrice>0)
+        {
+         st="Lots="+DoubleToStr(Lots,2)+
+            "  StopLoss="+StopLoss+" п."+
+            "  TakeProfit="+TakeProfit+" п.\n"+st;
+        }
+      st="OffsetTL="+OffsetTL+IIFs(MarketWatch,"  MarketWatch","")+"  Magic="+Magic+"\n"+st;
+      Comment(st);
+     }
+
+   if(gdUpPrice>0) gdPrevUpPrice=gdUpPrice;
+   if(gdDnPrice>0) gdPrevDnPrice=gdDnPrice;
+   gdPrevAsk=Ask;
+   gdPrevBid=Bid;
+  }
+//+----------------------------------------------------------------------------+
+//|                                                                            |
+//|  ПОЛЬЗОВАТЕЛЬСКИЕ ФУНКЦИИ                                                  |
+//|                                                                            |
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия  : 19.02.2008                                                      |
+//|  Описание: Закрытие одной предварительно выбранной позиции                 |
+//+----------------------------------------------------------------------------+
+void ClosePosBySelect()
+  {
+   bool   fc;
+   color  clClose;
+   double ll,pa,pb,pp;
+   int    err,it;
+
+   if(OrderType()==OP_BUY || OrderType()==OP_SELL)
+     {
+      for(it=1; it<=NumberOfTry; it++)
+        {
+         if(!IsTesting() && (!IsExpertEnabled() || IsStopped())) break;
+         while(!IsTradeAllowed()) Sleep(5000);
+         RefreshRates();
+         pa=MarketInfo(OrderSymbol(), MODE_ASK);
+         pb=MarketInfo(OrderSymbol(), MODE_BID);
+         if(OrderType()==OP_BUY)
+           {
+            pp=pb; clClose=clCloseBuy;
+              } else {
+            pp=pa; clClose=clCloseSell;
+           }
+         ll=OrderLots();
+         fc=OrderClose(OrderTicket(), ll, pp, Slippage, clClose);
+         if(fc)
+           {
+            if(UseSound) PlaySound(NameFileSound); break;
+              } else {
+            err=GetLastError();
+            if(err==146) while(IsTradeContextBusy()) Sleep(1000*11);
+            Print("Error(",err,") Close ",GetNameOP(OrderType())," ",
+                  ErrorDescription(err),", try ",it);
+            Print(OrderTicket(),"  Ask=",pa,"  Bid=",pb,"  pp=",pp);
+            Print("sy=",OrderSymbol(),"  ll=",ll,"  sl=",OrderStopLoss(),
+                  "  tp=",OrderTakeProfit(),"  mn=",OrderMagicNumber());
+            Sleep(1000*5);
+           }
+        }
+     }
+   else Print("Некорректная торговая операция. Close ",GetNameOP(OrderType()));
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 19.02.2008                                                     |
+//|  Описание : Закрытие позиций по рыночной цене                              |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    sy - наименование инструмента   (""   - любой символ,                   |
+//|                                     NULL - текущий символ)                 |
+//|    op - операция                   (-1   - любая позиция)                  |
+//|    mn - MagicNumber                (-1   - любой магик)                    |
+//+----------------------------------------------------------------------------+
+void ClosePositions(string sy="",int op=-1,int mn=-1)
+  {
+   int i,k=OrdersTotal();
+
+   if(sy=="0") sy=Symbol();
+   for(i=k-1; i>=0; i--)
+     {
+      if(OrderSelect(i,SELECT_BY_POS,MODE_TRADES))
+        {
+         if((OrderSymbol()==sy || sy=="") && (op<0 || OrderType()==op))
+           {
+            if(OrderType()==OP_BUY || OrderType()==OP_SELL)
+              {
+               if(mn<0 || OrderMagicNumber()==mn) ClosePosBySelect();
+              }
+           }
+        }
+     }
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 12.03.2008                                                     |
+//|  Описание : Возвращает флаг существования ордеров.                         |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    sy - наименование инструмента   (""   - любой символ,                   |
+//|                                     NULL - текущий символ)                 |
+//|    op - операция                   (-1   - любой ордер)                    |
+//|    mn - MagicNumber                (-1   - любой магик)                    |
+//|    ot - время открытия             ( 0   - любое время установки)          |
+//+----------------------------------------------------------------------------+
+bool ExistOrders(string sy="",int op=-1,int mn=-1,datetime ot=0)
+  {
+   int i,k=OrdersTotal(),ty;
+
+   if(sy=="0") sy=Symbol();
+   for(i=0; i<k; i++)
+     {
+      if(OrderSelect(i,SELECT_BY_POS,MODE_TRADES))
+        {
+         ty=OrderType();
+         if(ty>1 && ty<6)
+           {
+            if((OrderSymbol()==sy || sy=="") && (op<0 || ty==op))
+              {
+               if(mn<0 || OrderMagicNumber()==mn)
+                 {
+                  if(ot<=OrderOpenTime()) return(True);
+                 }
+              }
+           }
+        }
+     }
+   return(False);
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 06.03.2008                                                     |
+//|  Описание : Возвращает флаг существования позиций                          |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    sy - наименование инструмента   (""   - любой символ,                   |
+//|                                     NULL - текущий символ)                 |
+//|    op - операция                   (-1   - любая позиция)                  |
+//|    mn - MagicNumber                (-1   - любой магик)                    |
+//|    ot - время открытия             ( 0   - любое время открытия)           |
+//+----------------------------------------------------------------------------+
+bool ExistPositions(string sy="",int op=-1,int mn=-1,datetime ot=0)
+  {
+   int i,k=OrdersTotal();
+
+   if(sy=="0") sy=Symbol();
+   for(i=0; i<k; i++)
+     {
+      if(OrderSelect(i,SELECT_BY_POS,MODE_TRADES))
+        {
+         if(OrderSymbol()==sy || sy=="")
+           {
+            if(OrderType()==OP_BUY || OrderType()==OP_SELL)
+              {
+               if(op<0 || OrderType()==op)
+                 {
+                  if(mn<0 || OrderMagicNumber()==mn)
+                    {
+                     if(ot<=OrderOpenTime()) return(True);
+                    }
+                 }
+              }
+           }
+        }
+     }
+   return(False);
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 01.09.2005                                                     |
+//|  Описание : Возвращает наименование торговой операции                      |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    op - идентификатор торговой операции                                    |
+//+----------------------------------------------------------------------------+
+string GetNameOP(int op)
+  {
+   switch(op)
+     {
+      case OP_BUY      : return("Buy");
+      case OP_SELL     : return("Sell");
+      case OP_BUYLIMIT : return("Buy Limit");
+      case OP_SELLLIMIT: return("Sell Limit");
+      case OP_BUYSTOP  : return("Buy Stop");
+      case OP_SELLSTOP : return("Sell Stop");
+      default          : return("Unknown Operation");
+     }
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 01.09.2005                                                     |
+//|  Описание : Возвращает наименование таймфрейма                             |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    TimeFrame - таймфрейм (количество секунд)      (0 - текущий ТФ)         |
+//+----------------------------------------------------------------------------+
+string GetNameTF(int TimeFrame=0)
+  {
+   if(TimeFrame==0) TimeFrame=Period();
+   switch(TimeFrame)
+     {
+      case PERIOD_M1:  return("M1");
+      case PERIOD_M5:  return("M5");
+      case PERIOD_M15: return("M15");
+      case PERIOD_M30: return("M30");
+      case PERIOD_H1:  return("H1");
+      case PERIOD_H4:  return("H4");
+      case PERIOD_D1:  return("Daily");
+      case PERIOD_W1:  return("Weekly");
+      case PERIOD_MN1: return("Monthly");
+      default:           return("UnknownPeriod");
+     }
+  }
+
+//+----------------------------------------------------------------------------+
+//|  Возвращает размер лота                                                    |
+//+----------------------------------------------------------------------------+
+double GetSizeLot() { return(Lots); }
+//+----------------------------------------------------------------------------+
+//|  Идентификация верхнего и нижнего ценовых уровней                          |
+//+----------------------------------------------------------------------------+
+bool idPriceLevel()
+  {
+// Верхний ценовой уровень
+   if(ObjectFind(NameUpLine)<0)
+     {
+      gdUpPrice=0;
+      gdPrevUpPrice=0;
+      Message("Не найдена линия "+NameUpLine);
+        } else {
+      switch(ObjectType(NameUpLine))
+        {
+         case OBJ_HLINE: gdUpPrice=ObjectGet(NameUpLine, OBJPROP_PRICE1); break;
+         case OBJ_TREND: gdUpPrice=ObjectGetValueByShift(NameUpLine, 0); break;
+         default: Message("Неверный тип линии "+NameUpLine); break;
+        }
+      if(gdUpPrice>0) gdUpPrice+=OffsetTL*Point;
+     }
+
+// Нижний ценовой уровень
+   if(ObjectFind(NameDnLine)<0)
+     {
+      gdDnPrice=0;
+      gdPrevDnPrice=0;
+      Message("Не найдена линия "+NameDnLine);
+        } else {
+      switch(ObjectType(NameDnLine))
+        {
+         case OBJ_HLINE: gdDnPrice=ObjectGet(NameDnLine, OBJPROP_PRICE1); break;
+         case OBJ_TREND: gdDnPrice=ObjectGetValueByShift(NameDnLine, 0); break;
+         default: Message("Неверный тип линии "+NameDnLine); break;
+        }
+      if(gdDnPrice>0) gdDnPrice-=OffsetTL*Point;
+     }
+
+   if(gdUpPrice<gdPrevBid && gdUpPrice>0)
+     {
+      gdUpPrice=0;
+      Message("Верхняя линия "+NameUpLine+" расположена ниже рынка");
+     }
+   if(gdDnPrice>gdPrevAsk && gdPrevAsk>0)
+     {
+      gdDnPrice=0;
+      Message("Нижняя линия "+NameDnLine+" расположена выше рынка");
+     }
+
+   if(gdUpPrice!=gdPrevUpPrice|| gdDnPrice!=gdPrevDnPrice
+      || gdPrevUpPrice==0 || gdPrevDnPrice==0
+      || gdUpPrice==0 || gdDnPrice==0) return(False);
+   else return(True);
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 01.09.2005                                                     |
+//|  Описание : Возвращает одно из двух значений взависимости от условия.      |
+//+----------------------------------------------------------------------------+
+string IIFs(bool condition,string ifTrue,string ifFalse)
+  {
+   if(condition) return(ifTrue); else return(ifFalse);
+  }
+//+----------------------------------------------------------------------------+
+//|  Управление позициями                                                      |
+//+----------------------------------------------------------------------------+
+void ManagePositions()
+  {
+   bool   lbBuy=False,lbSell=False;
+   double ll=GetSizeLot();
+   double pp,sl=0,tp=0;
+   int    ti;
+
+   if((Ask>gdPrevAsk && Ask>=gdUpPrice  &&  BuyFromUp)
+      || (Ask<gdPrevAsk  &&  Ask<=gdDnPrice && BuyFromDn)) lbBuy=True;
+   if((Bid>gdPrevBid && Bid>=gdUpPrice && !BuyFromUp)
+      || (Bid<gdPrevBid  &&  Bid<=gdDnPrice && !BuyFromDn)) lbSell=True;
+
+   if(lbBuy)
+     {
+      if(ExistPositions(NULL,OP_SELL,Magic)) ClosePositions(NULL,OP_SELL,Magic);
+      if(!ExistPositions(NULL,OP_BUY,Magic))
+        {
+         if(MarketWatch)
+           {
+            ti=OpenPosition("",OP_BUY,ll,0,0,Magic);
+            if(SelectByTicket(ti))
+              {
+               if(StopLoss  >0) sl=Ask-StopLoss  *Point; else sl=0;
+               if(TakeProfit>0) tp=Ask+TakeProfit*Point; else tp=0;
+               ModifyOrder(-1,sl,tp,clModifyBuy);
+              }
+              } else {
+            if(StopLoss  >0) sl=Ask-StopLoss  *Point; else sl=0;
+            if(TakeProfit>0) tp=Ask+TakeProfit*Point; else tp=0;
+            OpenPosition("",OP_BUY,ll,sl,tp,Magic);
+           }
+         if(SetRevStopOrd && sl>0 && !ExistOrders(NULL,OP_SELLSTOP,Magic))
+           {
+            pp=sl;
+            sl=pp+StopLoss*Point;
+            if(TakeProfit>0) tp=pp-TakeProfit*Point; else tp=0;
+            SetOrder("",OP_SELLSTOP,ll,pp,sl,tp,Magic);
+           }
+        }
+     }
+   if(lbSell)
+     {
+      if(ExistPositions(NULL,OP_BUY,Magic)) ClosePositions(NULL,OP_BUY,Magic);
+      if(!ExistPositions(NULL,OP_SELL,Magic))
+        {
+         if(MarketWatch)
+           {
+            ti=OpenPosition("",OP_SELL,ll,0,0,Magic);
+            if(SelectByTicket(ti))
+              {
+               if(StopLoss  >0) sl=Bid+StopLoss  *Point; else sl=0;
+               if(TakeProfit>0) tp=Bid-TakeProfit*Point; else tp=0;
+               ModifyOrder(-1,sl,tp,clModifySell);
+              }
+              } else {
+            if(StopLoss  >0) sl=Bid+StopLoss  *Point; else sl=0;
+            if(TakeProfit>0) tp=Bid-TakeProfit*Point; else tp=0;
+            OpenPosition("",OP_SELL,ll,sl,tp,Magic);
+           }
+         if(SetRevStopOrd && sl>0 && !ExistOrders(NULL,OP_BUYSTOP,Magic))
+           {
+            pp=sl;
+            sl=pp-StopLoss*Point;
+            if(TakeProfit>0) tp=pp+TakeProfit*Point; else tp=0;
+            SetOrder("",OP_BUYSTOP,ll,pp,sl,tp,Magic);
+           }
+        }
+     }
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 01.09.2005                                                     |
+//|  Описание : Вывод сообщения в коммент и в журнал                           |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    m - текст сообщения                                                     |
+//+----------------------------------------------------------------------------+
+void Message(string m)
+  {
+   Comment(m);
+   if(StringLen(m)>0) Print(m);
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 28.11.2006                                                     |
+//|  Описание : Модификация одного предварительно выбранного ордера.           |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    pp - цена открытия позиции, установки ордера                            |
+//|    sl - ценовой уровень стопа                                              |
+//|    tp - ценовой уровень тейка                                              |
+//|    cl - цвет                                                               |
+//+----------------------------------------------------------------------------+
+void ModifyOrder(double pp=-1,double sl=0,double tp=0,color cl=CLR_NONE)
+  {
+   bool   fm;
+   double pa=MarketInfo(OrderSymbol(), MODE_ASK);
+   double pb=MarketInfo(OrderSymbol(), MODE_BID);
+   double op,os,ot;
+   int    dg,err,it;
+
+   if(pp<=0) pp=OrderOpenPrice();
+   if(sl<0) sl=OrderStopLoss();
+   if(tp<0) tp=OrderTakeProfit();
+
+   dg=MarketInfo(OrderSymbol(), MODE_DIGITS);
+   pp=NormalizeDouble(pp, dg);
+   sl=NormalizeDouble(sl, dg);
+   tp=NormalizeDouble(tp, dg);
+   op=NormalizeDouble(OrderOpenPrice() , dg);
+   os=NormalizeDouble(OrderStopLoss()  , dg);
+   ot=NormalizeDouble(OrderTakeProfit(), dg);
+
+   if(pp!=op || sl!=os || tp!=ot)
+     {
+      for(it=1; it<=NumberOfTry; it++)
+        {
+         if(!IsTesting() && (!IsExpertEnabled() || IsStopped())) break;
+         while(!IsTradeAllowed()) Sleep(5000);
+         RefreshRates();
+         fm=OrderModify(OrderTicket(),pp,sl,tp,0,cl);
+         if(fm)
+           {
+            if(UseSound) PlaySound(NameFileSound); break;
+              } else {
+            err=GetLastError();
+            Print("Error(",err,") modifying order: ",ErrorDescription(err),", try ",it);
+            Print("Ask=",pa,"  Bid=",pb,"  sy=",OrderSymbol(),
+                  "  op="+GetNameOP(OrderType()),"  pp=",pp,"  sl=",sl,"  tp=",tp);
+            Sleep(1000*10);
+           }
+        }
+     }
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 06.03.2008                                                     |
+//|  Описание : Открывает позицию и возвращает её тикет.                       |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    sy - наименование инструмента   ("" или NULL - текущий символ)          |
+//|    op - операция                                                           |
+//|    ll - лот                                                                |
+//|    sl - уровень стоп                                                       |
+//|    tp - уровень тейк                                                       |
+//|    mn - MagicNumber                                                        |
+//+----------------------------------------------------------------------------+
+int OpenPosition(string sy,int op,double ll,double sl=0,double tp=0,int mn=0)
+  {
+   color    clOpen;
+   datetime ot;
+   double   pp,pa,pb;
+   int      dg,err,it,ticket=0;
+   string   lsComm=WindowExpertName()+" "+GetNameTF(Period());
+
+   if(sy=="" || sy=="0") sy=Symbol();
+   if(op==OP_BUY) clOpen=clOpenBuy; else clOpen=clOpenSell;
+   for(it=1; it<=NumberOfTry; it++)
+     {
+      if(!IsTesting() && (!IsExpertEnabled() || IsStopped())) break;
+      while(!IsTradeAllowed()) Sleep(5000);
+      RefreshRates();
+      dg=MarketInfo(sy, MODE_DIGITS);
+      pa=MarketInfo(sy, MODE_ASK);
+      pb=MarketInfo(sy, MODE_BID);
+      if(op==OP_BUY) pp=pa; else pp=pb;
+      pp=NormalizeDouble(pp, dg);
+      ot=TimeCurrent();
+      ticket=OrderSend(sy,op,ll,pp,Slippage,sl,tp,lsComm,mn,0,clOpen);
+      if(ticket>0)
+        {
+         if(UseSound) PlaySound(NameFileSound); break;
+           } else {
+         err=GetLastError();
+         if(err==128 || err==142 || err==143)
+           {
+            Sleep(1000*66.666);
+            if(ExistPositions(sy,op,mn,ot))
+              {
+               if(UseSound) PlaySound(NameFileSound); break;
+              }
+           }
+         // Вывод сообщения об ошибке
+         Print("Error(",err,") opening position: ",ErrorDescription(err),", try ",it);
+         Print("Ask=",pa," Bid=",pb," sy=",sy," ll=",ll," op=",GetNameOP(op),
+               " pp=",pp," sl=",sl," tp=",tp," mn=",mn);
+         if(pa==0 && pb==0) Message("Проверьте в Обзоре рынка наличие символа "+sy);
+         // Блокировка работы советника
+         if(err==2 || err==64 || err==65 || err==133)
+           {
+            gbDisabled=True; break;
+           }
+         // Длительная пауза
+         if(err==4 || err==131 || err==132)
+           {
+            Sleep(1000*300); break;
+           }
+         if(err==140 || err==148 || err==4110 || err==4111) break;
+         if(err==141) Sleep(1000*100);
+         if(err==145) Sleep(1000*17);
+         if(err==146) while(IsTradeContextBusy()) Sleep(1000*11);
+         if(err!=135) Sleep(1000*7.7);
+        }
+     }
+   return(ticket);
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 20.04.2007                                                     |
+//|  Описание : Возвращает флаг удачного выбора ордрера или позиции по тикету  |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    ti - тикет ордера, позиции                                              |
+//|    sy - наименование инструмента   (""   - любой символ,                   |
+//|                                     NULL - текущий символ)                 |
+//|    op - операция                   (-1   - любая позиция)                  |
+//|    mn - MagicNumber                (-1   - любой магик)                    |
+//+----------------------------------------------------------------------------+
+bool SelectByTicket(int ti,string sy="",int op=-1,int mn=-1)
+  {
+   int i,k=OrdersTotal();
+
+   if(sy=="0") sy=Symbol();
+   for(i=0; i<k; i++)
+     {
+      if(OrderSelect(i,SELECT_BY_POS,MODE_TRADES))
+        {
+         if((OrderSymbol()==sy || sy=="") && (op<0 || OrderType()==op))
+           {
+            if((mn<0 || OrderMagicNumber()==mn) && OrderTicket()==ti) return(True);
+           }
+        }
+     }
+   return(False);
+  }
+//+----------------------------------------------------------------------------+
+//|  Автор    : Ким Игорь В. aka KimIV,  http://www.kimiv.ru                   |
+//+----------------------------------------------------------------------------+
+//|  Версия   : 13.03.2008                                                     |
+//|  Описание : Установка ордера.                                              |
+//+----------------------------------------------------------------------------+
+//|  Параметры:                                                                |
+//|    sy - наименование инструмента   (NULL или "" - текущий символ)          |
+//|    op - операция                                                           |
+//|    ll - лот                                                                |
+//|    pp - цена                                                               |
+//|    sl - уровень стоп                                                       |
+//|    tp - уровень тейк                                                       |
+//|    mn - Magic Number                                                       |
+//|    ex - Срок истечения                                                     |
+//+----------------------------------------------------------------------------+
+void SetOrder(string sy,int op,double ll,double pp,
+              double sl=0,double tp=0,int mn=0,datetime ex=0)
+  {
+   color    clOpen;
+   datetime ot;
+   double   pa,pb,mp;
+   int      err,it,ticket,msl;
+   string   lsComm=WindowExpertName()+" "+GetNameTF(Period());
+
+   if(sy=="" || sy=="0") sy=Symbol();
+   msl=MarketInfo(sy,MODE_STOPLEVEL);
+   if(op==OP_BUYLIMIT || op==OP_BUYSTOP) clOpen=clOpenBuy; else clOpen=clOpenSell;
+   if(ex>0 && ex<TimeCurrent()) ex=0;
+   for(it=1; it<=NumberOfTry; it++)
+     {
+      if(!IsTesting() && (!IsExpertEnabled() || IsStopped()))
+        {
+         Print("SetOrder(): Остановка работы функции");
+         break;
+        }
+      while(!IsTradeAllowed()) Sleep(5000);
+      RefreshRates();
+      ot=TimeCurrent();
+      ticket=OrderSend(sy,op,ll,pp,Slippage,sl,tp,lsComm,mn,ex,clOpen);
+      if(ticket>0)
+        {
+         if(UseSound) PlaySound(NameFileSound); break;
+           } else {
+         err=GetLastError();
+         if(err==128 || err==142 || err==143)
+           {
+            Sleep(1000*66);
+            if(ExistOrders(sy,op,mn,ot))
+              {
+               if(UseSound) PlaySound(NameFileSound); break;
+              }
+            Print("Error(",err,") set order: ",ErrorDescription(err),", try ",it);
+            continue;
+           }
+         mp=MarketInfo(sy, MODE_POINT);
+         pa=MarketInfo(sy, MODE_ASK);
+         pb=MarketInfo(sy, MODE_BID);
+         if(pa==0 && pb==0) Message("SetOrder(): Проверьте в обзоре рынка наличие символа "+sy);
+         Print("Error(",err,") set order: ",ErrorDescription(err),", try ",it);
+         Print("Ask=",pa,"  Bid=",pb,"  sy=",sy,"  ll=",ll,"  op=",GetNameOP(op),
+               "  pp=",pp,"  sl=",sl,"  tp=",tp,"  mn=",mn);
+         // Неправильные стопы
+         if(err==130)
+           {
+            switch(op)
+              {
+               case OP_BUYLIMIT:
+                  if(pp>pa-msl*mp) pp=pa-msl*mp;
+                  if(sl>pp-(msl+1)*mp) sl=pp-(msl+1)*mp;
+                  if(tp>0 && tp<pp+(msl+1)*mp) tp=pp+(msl+1)*mp;
+                  break;
+               case OP_BUYSTOP:
+                  if(pp<pa+(msl+1)*mp) pp=pa+(msl+1)*mp;
+                  if(sl>pp-(msl+1)*mp) sl=pp-(msl+1)*mp;
+                  if(tp>0 && tp<pp+(msl+1)*mp) tp=pp+(msl+1)*mp;
+                  break;
+               case OP_SELLLIMIT:
+                  if(pp<pb+msl*mp) pp=pb+msl*mp;
+                  if(sl>0 && sl<pp+(msl+1)*mp) sl=pp+(msl+1)*mp;
+                  if(tp>pp-(msl+1)*mp) tp=pp-(msl+1)*mp;
+                  break;
+               case OP_SELLSTOP:
+                  if(pp>pb-msl*mp) pp=pb-msl*mp;
+                  if(sl>0 && sl<pp+(msl+1)*mp) sl=pp+(msl+1)*mp;
+                  if(tp>pp-(msl+1)*mp) tp=pp-(msl+1)*mp;
+                  break;
+              }
+            Print("SetOrder(): Скорректированы ценовые уровни");
+           }
+         // Блокировка работы советника
+         if(err==2 || err==64 || err==65 || err==133)
+           {
+            gbDisabled=True; break;
+           }
+         // Длительная пауза
+         if(err==4 || err==131 || err==132)
+           {
+            Sleep(1000*300); break;
+           }
+         // Слишком частые запросы (8) или слишком много запросов (141)
+         if(err==8 || err==141) Sleep(1000*100);
+         if(err==139 || err==140 || err==148) break;
+         // Ожидание освобождения подсистемы торговли
+         if(err==146) while(IsTradeContextBusy()) Sleep(1000*11);
+         // Обнуление даты истечения
+         if(err==147)
+           {
+            ex=0; continue;
+           }
+         if(err!=135 && err!=138) Sleep(1000*7.7);
+        }
+     }
+  }
+//+----------------------------------------------------------------------------+
