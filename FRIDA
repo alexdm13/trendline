@@ -1,0 +1,1653 @@
+//+------------------------------------------------------------------+
+//|                              FRIDAY-TS-WithATR-WorkWithLines.mq5 |
+//|                        Copyright 2019, MetaQuotes Software Corp. |
+//|                                             https://www.mql5.com |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2019, MetaQuotes Software Corp."
+#property link      "https://www.mql5.com"
+#property version   "1.00"
+#define KEY_5       53
+#define OP_BUY       0
+#define OP_SELL      1
+#define OP_BUYLIMIT  2
+#define OP_SELLLIMIT 3
+#define OP_BUYSTOP   4
+#define OP_SELLSTOP  5
+#include<Trade\Trade.mqh>
+#include<Trade\OrderInfo.mqh>
+#include<Trade\PositionInfo.mqh>
+#include<Trade\DealInfo.mqh>
+#include<Trade\DealInfo.mqh>
+#include<Trade\SymbolInfo.mqh>
+
+CTrade trade;
+COrderInfo tradeInfo;
+CDealInfo tradeHistoryInfo;
+CPositionInfo positionInfo;
+CSymbolInfo symbolInfo;
+
+enum tsl
+  {
+   pATR,//В процентах от ATR
+   pts//В пунктах
+  };
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+enum ttp
+  {
+   percATR,//В процентах от ATR
+   percSL,//В процентах от SL
+   points//В пунктах
+  };
+input ENUM_TIMEFRAMES workTF=0; //Рабочий таймфрейм
+input bool useATRinput=true; //Отслеживать пробой ATR перед открытием сделки?
+input double percATRtoInput=15;//Процент пробоя от ATR
+color input labelATRinputColor=Red; //Цвет надписи с уведомлением о цене пробоя ATR
+input bool AutoB=true; //Автобаланс
+input double deposit=10000; //Размер депозита
+input double riskPercInput=0.2;//Риск на сделку в процентах
+input int periodATR=5;//Количество дней для расчёта ATR
+input tsl typeSL=pATR;//Тип стоп-лосса
+input double slPercATR=15;//Размер стоп-лосса в процентах от ATR
+input int slPoints=60;//Размер стоп-лосса в пунктах
+input ttp typeTP=percATR;//Тип тейк-профита
+input double tpPercATR=75;//Размер тейк-профита в процентах от ATR
+input double tpPercSL=500;//Размер тейк-профита в процентах от SL
+extern int tpPoints=60;//Размер тейк-профита в пунктах
+input int countEnters=1; //Количество повторных входов
+input bool useBU=false; //Использовать безубыток?
+input int buRangeStops=3; //Количество стопов для безубытка
+input bool minLot=false; //Торговать только минимальным лотом?
+input bool closeOrderAccess=true;//Разрешить отмену ордера?
+input double valueOfStops=3;//Кол-во стопов для отмены ордера
+input bool useSpreadCorrection=false; //Учитывать спред при выставлении ордеров?
+input int MN=3357; //Магическое число
+input int font_size1=11; //Размер шрифта для индикатора
+input int TP=5;//Тейк-профит для индикатора
+input color indColor1=clrMediumSeaGreen; // 1-й цвет для индикатора
+input color indColor2=clrFireBrick; // 2-й цвет для индикатора
+input color indColor3=clrDimGray; // 3-й цвет для индикатора
+input color indColor4=clrDodgerBlue; // 4-й цвет для индикатора
+input color indColor5=clrAqua; // 5-й цвет для индикатора
+input color indColor6=clrAqua; // 6-й цвет для индикатора
+input bool WorkWithLinesEnabled=false; //Выставлять ордер по линиям?
+input color openPriceColor=clrGold; //Цвет линии цены открытия
+input color slPriceColor=clrRed; //Цвет линии стоп-лосса
+input color tpPriceColor=clrLime; //Цвет линии тейк-профита
+
+int slippage=3;
+string commentEA="Trade helper's order";
+bool hidedPanel=false;
+double riskPercParamether=riskPercInput;
+
+int ATR_D=0;
+double pips;
+datetime timeCheck=0;
+//+------------------------------------------------------------------+
+//| Expert initialization function                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+  {
+   Comment("");
+   riskPercParamether=riskPercInput;
+   pips=_Point;
+   CreateHide();
+   if(!MQLInfoInteger(MQL_TESTER))
+      EventSetMillisecondTimer(500);
+   if(!hidedPanel)
+      CreateContent();
+
+   if(GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)<=0)
+      GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,0);
+   if(GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN)<=0)
+      GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,0);
+   if(GlobalVariableGet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN)<=0)
+      GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,0);
+   if(GlobalVariableGet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN)<=0)
+      GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,0);
+   if(GlobalVariableGet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN)<=0)
+      GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,0);
+   if(GlobalVariableGet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN)<=0)
+      GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,0);
+   if(GlobalVariableGet("PRICE_TradeHelperPriceEdit_"+Symbol()+"_"+(string)MN)<=0)
+      GlobalVariableSet("PRICE_TradeHelperPriceEdit_"+Symbol()+"_"+(string)MN,0);
+   if(GlobalVariableGet("RISK_TradeHelperRiskEdit_"+Symbol()+"_"+(string)MN)<=0)
+      GlobalVariableSet("RISK_TradeHelperRiskEdit_"+Symbol()+"_"+(string)MN,0);
+
+
+//--- зададим MagicNumber для идентификации своих ордеров
+   trade.SetExpertMagicNumber(MN);
+//--- установим допустимое проскальзывание в пунктах при совершении покупки/продажи
+   trade.SetDeviationInPoints(slippage);
+//--- режим заполнения ордера, нужно использовать тот режим, который разрешается сервером
+   trade.SetTypeFilling(ORDER_FILLING_RETURN);
+//--- какую функцию использовать для торговли: true - OrderSendAsync(), false - OrderSend()
+   trade.SetAsyncMode(true);
+//---
+   return(INIT_SUCCEEDED);
+  }
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                 |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+  {
+   if(!MQLInfoInteger(MQL_TESTER))
+      EventKillTimer();
+   for(int i=ObjectsTotal(0); i>=0; i--)
+      if(StringFind(ObjectName(0,i),"TradeHelper")!=-1||ObjectName(0,i)=="TrHelperButton_hide")
+         ObjectDelete(0,ObjectName(0,i));
+
+   if(reason==0 || reason==1 || reason==5 || reason==6 || reason==4)
+     {
+      GlobalVariableDel("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperATRInputPrice_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperATRInputType_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperATRInputStartPrice_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("TradeHelperATROrderPrice_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("PRICE_TradeHelperPriceEdit_"+Symbol()+"_"+(string)MN);
+      GlobalVariableDel("RISK_TradeHelperRiskEdit_"+Symbol()+"_"+(string)MN);
+      ObjectDelete(0,"ATR_H");
+      ObjectDelete(0,"ATR_L");
+      ObjectDelete(0,"ATR_H1");
+      ObjectDelete(0,"ATR_L1");
+      ObjectDelete(0,"1");
+      ObjectDelete(0,"2");
+      ObjectDelete(0,"3");
+      ObjectDelete(0,"4");
+      ObjectDelete(0,"5");
+      ObjectDelete(0,"6");
+      ObjectDelete(0,"7");
+      ObjectDelete(0,"8");
+      ObjectDelete(0,"11");
+      ObjectDelete(0,"22");
+      ObjectDelete(0,"33");
+      ObjectDelete(0,"44");
+      ObjectDelete(0,"55");
+      ObjectDelete(0,"66");
+      ObjectDelete(0,"77");
+     }
+  }
+//+------------------------------------------------------------------+
+//| Expert tick function                                             |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   CallIndAtr();
+
+   if(useATRinput)
+     {
+      double priceATR=GlobalVariableGet("TradeHelperATRInputPrice_"+Symbol()+"_"+(string)MN);
+      if(priceATR>0)
+        {
+         int type=(int)GlobalVariableGet("TradeHelperATRInputType_"+Symbol()+"_"+(string)MN);
+         ShowATRInputLabel(priceATR,type);
+        }
+      else
+         RemoveATRInputLabel();
+     }
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CheckGVAndSetOBJ_EDIT()
+  {
+   if(GlobalVariableGet("PRICE_TradeHelperPriceEdit_"+Symbol()+"_"+(string)MN)!=0&&StringToDouble(ObjectGetString(0,"TradeHelperPriceEdit",OBJPROP_TEXT))!=GlobalVariableGet("PRICE_TradeHelperPriceEdit_"+Symbol()+"_"+(string)MN))
+      ObjectSetString(0,"TradeHelperPriceEdit",OBJPROP_TEXT,(string)(GlobalVariableGet("PRICE_TradeHelperPriceEdit_"+Symbol()+"_"+(string)MN)));
+   if(GlobalVariableGet("RISK_TradeHelperRiskEdit_"+Symbol()+"_"+(string)MN)!=0&&StringToDouble(ObjectGetString(0,"TradeHelperRiskEdit",OBJPROP_TEXT))!=GlobalVariableGet("RISK_TradeHelperRiskEdit_"+Symbol()+"_"+(string)MN))
+      ObjectSetString(0,"TradeHelperRiskEdit",OBJPROP_TEXT,(string)(GlobalVariableGet("RISK_TradeHelperRiskEdit_"+Symbol()+"_"+(string)MN)));
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void OnTick()
+  {
+   if(MQLInfoInteger(MQL_TESTER))
+     {
+      CheckGVAndSetOBJ_EDIT();
+      PressHide();
+
+      CallIndAtr();
+
+      if(ButtonPressed("TradeHelperBuyButton"))
+        {
+         BuySellButtonPressed(OP_BUY);
+         ObjectSetInteger(0,"TradeHelperBuyButton",OBJPROP_STATE,false);
+        }
+
+      if(ButtonPressed("TradeHelperSellButton"))
+        {
+         BuySellButtonPressed(OP_SELL);
+         ObjectSetInteger(0,"TradeHelperSellButton",OBJPROP_STATE,false);
+        }
+
+      if(ButtonPressed("TradeHelperResetButton"))
+        {
+         GlobalVariableDel("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN);
+         if(GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,0);
+
+         GlobalVariableSet("TradeHelperATRInputType_"+Symbol()+"_"+(string)MN,-1);
+         GlobalVariableSet("TradeHelperATRInputPrice_"+Symbol()+"_"+(string)MN,-1);
+         GlobalVariableSet("TradeHelperATRInputStartPrice_"+Symbol()+"_"+(string)MN,-1);
+         GlobalVariableSet("TradeHelperATROrderPrice_"+Symbol()+"_"+(string)MN,-1);
+
+         ObjectSetInteger(0,"TradeHelperResetButton",OBJPROP_STATE,false);
+        }
+     }
+
+
+   if(closeOrderAccess)
+      CheckLevelToCloseOrders();
+
+   if(useATRinput)
+     {
+      double priceATR=GlobalVariableGet("TradeHelperATRInputPrice_"+Symbol()+"_"+(string)MN);
+      if(priceATR>0)
+        {
+         int type=(int)GlobalVariableGet("TradeHelperATRInputType_"+Symbol()+"_"+(string)MN);
+         double startPrice=GlobalVariableGet("TradeHelperATRInputStartPrice_"+Symbol()+"_"+(string)MN);
+         double ordprice=GlobalVariableGet("TradeHelperATROrderPrice_"+Symbol()+"_"+(string)MN);
+         ShowATRInputLabel(priceATR,type);
+         if(startPrice<priceATR&&SymbolInfoDouble(_Symbol,SYMBOL_ASK)>=priceATR)
+           {
+            OpenOrder(type,ordprice);
+            GlobalVariableSet("TradeHelperATRInputType_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperATRInputPrice_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperATRInputStartPrice_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperATROrderPrice_"+Symbol()+"_"+(string)MN,-1);
+           }
+         if(startPrice>priceATR&&SymbolInfoDouble(_Symbol,SYMBOL_BID)<=priceATR)
+           {
+            OpenOrder(type,ordprice);
+            GlobalVariableSet("TradeHelperATRInputType_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperATRInputPrice_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperATRInputStartPrice_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperATROrderPrice_"+Symbol()+"_"+(string)MN,-1);
+           }
+        }
+      else
+         RemoveATRInputLabel();
+     }
+
+   if(isNewBar())
+      if(CountOrders()==0)
+        {
+         if(GetPrevOrderProfit()<0)
+           {
+            if(GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)>0)
+              {
+               if(GlobalVariableGet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN)==OP_BUY)
+                  if(iClose(Symbol(),workTF,1)>GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN))
+                     // if(iClose(Symbol(),(int)workTF,2)<=GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN))
+                     OpenOrder((int)GlobalVariableGet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN),GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN),true);
+               if(GlobalVariableGet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN)==OP_SELL)
+                  if(iClose(Symbol(),workTF,1)<GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN))
+                     // if(iClose(Symbol(),(int)workTF,2)>=GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN))
+                     OpenOrder((int)GlobalVariableGet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN),GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN),true);
+
+              }
+           }
+         else
+           {
+            GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,0);
+            GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,-1);
+            GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,-1);
+           }
+        }
+
+   if(PositionsTotal()>0)
+      SetBU();
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool isNewBar()
+  {
+   if(timeCheck!=iTime(Symbol(),workTF,0))
+     {
+      timeCheck=iTime(Symbol(),workTF,0);
+      return true;
+     }
+   return false;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int CountOrders()
+  {
+   int count=0;
+   for(int i=OrdersTotal()-1; i>=0; i--)
+      if(tradeInfo.SelectByIndex(i) && tradeInfo.Magic()==MN && tradeInfo.Symbol()==Symbol())
+         count++;
+   for(int i=PositionsTotal()-1; i>=0; i--)
+      if(positionInfo.SelectByIndex(i) && positionInfo.Magic()==MN && positionInfo.Symbol()==Symbol())
+         count++;
+
+//Print("Всего открыто сделок: "+count);
+
+   return count;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double GetPrevOrderProfit()
+  {
+   double profit=1;
+   datetime time=0;
+   HistorySelect(iTime(Symbol(),PERIOD_D1,3),TimeCurrent());
+   for(int i=HistoryDealsTotal()-1; i>=0; i--)
+      if(tradeHistoryInfo.SelectByIndex(i) && tradeHistoryInfo.Magic()==MN && tradeHistoryInfo.Symbol()==Symbol())
+         if(tradeHistoryInfo.Time()>time)
+           {
+            time=tradeHistoryInfo.Time();
+            profit=tradeHistoryInfo.Profit();
+           }
+
+//Print("Профит последнего ордера: "+profit+" - "+HistoryDealsTotal());
+
+   return profit;
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void SetBU()
+  {
+   if(!useBU)
+      return;
+   int tryModify=0;
+   double PointsToBU=0;
+
+   for(int i=PositionsTotal()-1; i>=0; i--)
+      if(positionInfo.SelectByIndex(i) && positionInfo.Magic()==MN && positionInfo.Symbol()==Symbol())
+        {
+         if(positionInfo.StopLoss()==0)
+            continue;
+         if(positionInfo.PositionType()==POSITION_TYPE_BUY)
+            PointsToBU=positionInfo.PriceOpen()-positionInfo.StopLoss();
+         if(positionInfo.PositionType()==POSITION_TYPE_SELL)
+            PointsToBU=positionInfo.StopLoss()-positionInfo.PriceOpen();
+
+         PointsToBU*=buRangeStops;
+
+         //Print("Размер стопа *3: "+PointsToBU+" реально пройдено: "+(iClose(Symbol(),Period(),0)-positionInfo.PriceOpen()));
+
+         if(positionInfo.PositionType()==POSITION_TYPE_BUY && iClose(Symbol(),Period(),0)-positionInfo.PriceOpen()>PointsToBU)
+           {
+            if(positionInfo.StopLoss()<positionInfo.PriceOpen())
+              {
+               while(tryModify<5)
+                 {
+                  if(trade.PositionModify(positionInfo.Ticket(),positionInfo.PriceOpen()+SymbolInfoInteger(Symbol(),SYMBOL_SPREAD)*Point(),positionInfo.TakeProfit())==false)
+                    {
+                     Print("OrderModify error #",GetLastError()," on ",Symbol()," ticket - ",positionInfo.Ticket());
+                     Sleep(3000);
+                     tryModify++;
+                    }
+                  else
+                     break;
+                 }
+               tryModify =0;
+              }
+           }
+
+         if(positionInfo.PositionType()==POSITION_TYPE_SELL && positionInfo.PriceOpen()-iClose(Symbol(),Period(),0)>PointsToBU)
+           {
+            if(positionInfo.StopLoss()>positionInfo.PriceOpen())
+              {
+               while(tryModify<5)
+                 {
+                  if(trade.PositionModify(positionInfo.Ticket(),positionInfo.PriceOpen()-SymbolInfoInteger(Symbol(),SYMBOL_SPREAD)*Point(),positionInfo.TakeProfit())==false)
+                    {
+                     Print("OrderModify error #",GetLastError()," on ",Symbol()," ticket - ",positionInfo.Ticket());
+                     Sleep(3000);
+                     tryModify ++;
+                    }
+                  else
+                     break;
+                 }
+               tryModify =0;
+              }
+           }
+        }
+  }
+
+double buyPrice,sellPrice,slPrice,tpPrice;
+int checkForOrderOpening=false;
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CheckLevelToCloseOrders()
+  {
+   double stopLoss=0;
+
+   for(int i=OrdersTotal()-1; i>=0; i--)
+      if(tradeInfo.SelectByIndex(i) && tradeInfo.Magic()==MN && tradeInfo.Symbol()==Symbol())
+        {
+         if(tradeInfo.StopLoss()==0)
+            continue;
+         if(tradeInfo.OrderType()==ORDER_TYPE_BUY_LIMIT || tradeInfo.OrderType()==ORDER_TYPE_BUY_STOP)
+            stopLoss=tradeInfo.PriceOpen()-tradeInfo.StopLoss();
+         if(tradeInfo.OrderType()==ORDER_TYPE_SELL_LIMIT || tradeInfo.OrderType()==ORDER_TYPE_SELL_STOP)
+            stopLoss=tradeInfo.StopLoss()-tradeInfo.PriceOpen();
+
+         stopLoss = NormalizeDouble(stopLoss,Digits());
+         stopLoss*=valueOfStops;
+
+         if((tradeInfo.OrderType()==ORDER_TYPE_BUY_LIMIT || tradeInfo.OrderType()==ORDER_TYPE_SELL_STOP) && NormalizeDouble(iClose(Symbol(),workTF,0)-tradeInfo.PriceOpen(),Digits())>stopLoss)
+           {
+            CloseOrder(tradeInfo.Ticket(),NormalizeDouble(iClose(Symbol(),workTF,0)-tradeInfo.PriceOpen(),Digits()),stopLoss);
+           }
+         if((tradeInfo.OrderType()==ORDER_TYPE_SELL_LIMIT || tradeInfo.OrderType()==ORDER_TYPE_BUY_STOP) && NormalizeDouble(tradeInfo.PriceOpen()-iClose(Symbol(),workTF,0),Digits())>stopLoss)
+           {
+            CloseOrder(tradeInfo.Ticket(),NormalizeDouble(tradeInfo.PriceOpen()-iClose(Symbol(),workTF,0),Digits()),stopLoss);
+           }
+
+        }
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CloseOrder(ulong ticket,double price,double sl)
+  {
+   if(trade.OrderDelete(ticket))
+     {
+      Print("Закрыт ордер N ",ticket," по сигналу отмены ордера: разница уровней цены (",price,") больше умноженного стоплосса (",sl,")");
+
+      GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,0);
+      GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,0);
+      GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,0);
+      GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,0);
+      GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,0);
+      GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,0);
+     }
+   else
+      Print("Ошибка закрытия ордера N ",ticket);
+
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void BuySellButtonPressed(int type)
+  {
+   string name;
+   if(type==OP_BUY)
+      name="TradeHelperBuyButton";
+   else
+      name="TradeHelperSellButton";
+   Sleep(100);
+   if(ObjectGetInteger(0,name,OBJPROP_STATE))
+      ObjectSetInteger(0,name,OBJPROP_STATE,false);
+
+   if(useATRinput)
+     {
+      double price=GetPriceEdit();
+      double ordprice=price;
+      if(price<=0)
+        {
+         Alert("Введена неверная цена!");
+         return;
+        }
+
+      double rangeToInput=(percATRtoInput*((double)ObjectGetString(0,"11",OBJPROP_TEXT)/100));
+
+      if(SymbolInfoDouble(_Symbol,SYMBOL_BID)<price)
+         price+=rangeToInput*_Point;
+      else
+         price-=rangeToInput*_Point;
+
+      double startPrice=SymbolInfoDouble(_Symbol,SYMBOL_BID);
+
+      if(startPrice>price)
+         startPrice=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+
+      GlobalVariableSet("TradeHelperATRInputType_"+Symbol()+"_"+(string)MN,type);
+      GlobalVariableSet("TradeHelperATRInputPrice_"+Symbol()+"_"+(string)MN,price);
+      GlobalVariableSet("TradeHelperATROrderPrice_"+Symbol()+"_"+(string)MN,ordprice);
+      GlobalVariableSet("TradeHelperATRInputStartPrice_"+Symbol()+"_"+(string)MN,startPrice);
+      ShowATRInputLabel(price,type);
+     }
+   else
+     {
+      if(WorkWithLinesEnabled)
+        {
+         buyPrice=-1;
+         sellPrice=-1;
+         tpPrice=-1;
+         slPrice=-1;
+         if(type==OP_BUY)
+           {
+            buyPrice=getPriceOfLine(0);
+            sellPrice=-1;
+           }
+         else
+           {
+            buyPrice=-1;
+            sellPrice=getPriceOfLine(0);
+           }
+         slPrice=getPriceOfLine(1);
+         tpPrice=getPriceOfLine(2);
+         //Alert("buy: "+buyPrice+" sell: "+sellPrice+" sl: "+slPrice+" tp: "+tpPrice);
+
+         //checkForOrderOpening=true;
+
+         if(type==OP_BUY && (buyPrice==-1 || slPrice==-1 || tpPrice==-1 || tpPrice<=buyPrice || slPrice>=buyPrice))
+           {
+            checkForOrderOpening=false;
+            Alert("Неверно заданы линии!");
+            return;
+           }
+         if(type==OP_SELL && (sellPrice==-1 || slPrice==-1 || tpPrice==-1 || tpPrice>=sellPrice || slPrice<=sellPrice))
+           {
+            checkForOrderOpening=false;
+            Alert("Неверно заданы линии!");
+            return;
+           }
+         if(type==OP_BUY)
+            OpenOrder(type,buyPrice);
+         else
+            OpenOrder(type,sellPrice);
+        }
+      else
+        {
+         double price=GetPriceEdit();
+         if(price<=0)
+           {
+            Alert("Введена неверная цена!");
+            return;
+           }
+         OpenOrder(type,price);
+        }
+     }
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void ShowATRInputLabel(double price, int type)
+  {
+   string typestr="BUY";
+   if(type==OP_SELL)
+      typestr="SELL";
+   string text="Активировано открытие ордера "+typestr+" по достижению цены "+DoubleToString(price,_Digits);
+
+   if(ObjectFind(0,"TradeHelperATRinputLabel")!=-1)
+     {
+      if(ObjectGetString(0,"TradeHelperATRinputLabel",OBJPROP_TEXT)==text)
+         return;
+      else
+         RemoveATRInputLabel();
+     }
+   LabelCreate(0,"TradeHelperATRinputLabel",0,10,30,CORNER_LEFT_LOWER,text,"Arial",12,labelATRinputColor);
+  }
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void RemoveATRInputLabel()
+  {
+   ObjectDelete(0,"TradeHelperATRinputLabel");
+  }
+
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double getPriceOfLine(int typeOfLine)
+  {
+   double price=-1;
+   color neededColor=clrBlack;
+   if(typeOfLine==0)
+      neededColor=openPriceColor;
+   if(typeOfLine==1)
+      neededColor=slPriceColor;
+   if(typeOfLine==2)
+      neededColor=tpPriceColor;
+
+   for(int i=ObjectsTotal(0); i>=0; i--)
+      if(ObjectGetInteger(0,ObjectName(0,i),OBJPROP_TYPE)==OBJ_HLINE && ObjectGetInteger(0,ObjectName(0,i),OBJPROP_COLOR)==neededColor)
+         price=ObjectGetDouble(0,ObjectName(0,i),OBJPROP_PRICE);
+
+   string priceStr=DoubleToString(price,_Digits);
+   return StringToDouble(priceStr);
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void OpenOrder(int type,double price,bool flag=false)
+  {
+   ENUM_ORDER_TYPE typeToOpen=-1;
+   double sl=-1,tp=-1;
+
+   if(type==OP_BUY && price>SymbolInfoDouble(_Symbol,SYMBOL_ASK))
+      typeToOpen=ORDER_TYPE_BUY_STOP;
+   if(type==OP_BUY && price<SymbolInfoDouble(_Symbol,SYMBOL_ASK))
+      typeToOpen=ORDER_TYPE_BUY_LIMIT;
+   if(type==OP_SELL && price>SymbolInfoDouble(_Symbol,SYMBOL_BID))
+      typeToOpen=ORDER_TYPE_SELL_LIMIT;
+   if(type==OP_SELL && price<SymbolInfoDouble(_Symbol,SYMBOL_BID))
+      typeToOpen=ORDER_TYPE_SELL_STOP;
+
+   if(typeToOpen==-1)
+     {
+      Alert("Невозможно определить направление торговли!");
+      return;
+     }
+
+
+   double lot=-1;
+   if(flag==false)
+     {
+      int slRange;
+      int tpRange;
+      if(!WorkWithLinesEnabled)
+        {
+         slRange=GetSLRange();
+         tpRange=GetTPRange(slRange);
+        }
+      else
+        {
+         slRange=(int)(MathAbs(slPrice-price)/_Point);
+         tpRange=(int)(MathAbs(tpPrice-price)/_Point);
+        }
+      if(type==OP_BUY)
+        {
+         sl=NormalizeDouble(price-slRange*_Point,Digits());
+         tp=NormalizeDouble(price+tpRange*_Point,Digits());
+        }
+      else
+        {
+         sl=NormalizeDouble(price+slRange*_Point,Digits());
+         tp=NormalizeDouble(price-tpRange*_Point,Digits());
+        }
+      if(sl==-1)
+        {
+         Alert("Невозможно рассчитать SL!");
+         return;
+        }
+      if(tp==-1)
+        {
+         Alert("Невозможно рассчитать TP!");
+         return;
+        }
+
+      lot=GetLot(slRange);
+
+      if(lot==-1)
+        {
+         Alert("Невозможно рассчитать лот!");
+         return;
+        }
+     }
+   else
+     {
+      sl=GlobalVariableGet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN);
+      tp=GlobalVariableGet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN);
+      lot=GlobalVariableGet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN);
+     }
+
+
+   int trySend=0;
+
+   symbolInfo.Name(Symbol());
+   price=symbolInfo.NormalizePrice(price);
+   sl=symbolInfo.NormalizePrice(sl);
+   tp=symbolInfo.NormalizePrice(tp);
+
+   if(useSpreadCorrection)
+     {
+      /*if(price<SymbolInfoDouble(_Symbol,SYMBOL_BID))
+        {
+         price+=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         sl+=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         tp+=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+        }
+      else
+        {
+         price-=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         sl-=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         tp-=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+        }*/
+      if(typeToOpen==ORDER_TYPE_BUY_STOP||typeToOpen==ORDER_TYPE_BUY_LIMIT)
+        {
+         price+=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         price=symbolInfo.NormalizePrice(price);
+        }
+      else
+        {
+         if(sl!=0)
+            sl+=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         if(tp!=0)
+            tp+=(SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID));
+         sl=symbolInfo.NormalizePrice(sl);
+         tp=symbolInfo.NormalizePrice(tp);
+        }
+     }
+
+   /* if(typeToOpen==ORDER_TYPE_BUY_STOP&&price<=SymbolInfoDouble(_Symbol,SYMBOL_ASK))
+      {
+       Alert("Неподходящая цена "+(string)price+" для установки ордера BuyStop! Цена установки должна быть выше чем "+(string)SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+       return;
+      }
+    if(typeToOpen==ORDER_TYPE_BUY_LIMIT&&price>=SymbolInfoDouble(_Symbol,SYMBOL_BID))
+      {
+       Alert("Неподходящая цена "+(string)price+" для установки ордера BuyLimit! Цена установки должна быть ниже чем "+(string)SymbolInfoDouble(_Symbol,SYMBOL_BID));
+       return;
+      }
+    if(typeToOpen==ORDER_TYPE_SELL_STOP&&price>=SymbolInfoDouble(_Symbol,SYMBOL_BID))
+      {
+       Alert("Неподходящая цена "+(string)price+" для установки ордера SellStop! Цена установки должна быть ниже чем "+(string)SymbolInfoDouble(_Symbol,SYMBOL_BID));
+       return;
+      }
+    if(typeToOpen==ORDER_TYPE_SELL_LIMIT&&price<=SymbolInfoDouble(_Symbol,SYMBOL_ASK))
+      {
+       Alert("Неподходящая цена "+(string)price+" для установки ордера SellLimit! Цена установки должна быть выше чем "+(string)SymbolInfoDouble(_Symbol,SYMBOL_ASK));
+       return;
+      }*/
+
+
+   while(trySend<5)
+     {
+      if(typeToOpen==ORDER_TYPE_BUY_STOP)
+         if(!trade.BuyStop(lot,price,Symbol(),sl,tp,0,0,commentEA))
+           {
+            trySend++;
+            //--- сообщим о неудаче
+            Print("Метод BuyStop() потерпел неудачу. Код возврата=",trade.ResultRetcode(),
+                  ". Описание кода: ",trade.ResultRetcodeDescription());
+           }
+         else
+           {
+            Print("Метод BuyStop() выполнен успешно. Код возврата=",trade.ResultRetcode(),
+                  " (",trade.ResultRetcodeDescription(),")");
+            if(GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)==0)
+              {
+               GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,countEnters);
+               GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,price);
+               GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,type);
+               GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,lot);
+               GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,tp);
+               GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,sl);
+              }
+            else
+               GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)-1);
+            break;
+           }
+
+      if(typeToOpen==ORDER_TYPE_SELL_STOP)
+         if(!trade.SellStop(lot,price,Symbol(),sl,tp,0,0,commentEA))
+           {
+            trySend++;
+            //--- сообщим о неудаче
+            Print("Метод SellStop() потерпел неудачу. Код возврата=",trade.ResultRetcode(),
+                  ". Описание кода: ",trade.ResultRetcodeDescription());
+           }
+         else
+           {
+            Print("Метод SellStop() выполнен успешно. Код возврата=",trade.ResultRetcode(),
+                  " (",trade.ResultRetcodeDescription(),")");
+            if(GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)==0)
+              {
+               GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,countEnters);
+               GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,price);
+               GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,type);
+               GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,lot);
+               GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,tp);
+               GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,sl);
+              }
+            else
+               GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)-1);
+            break;
+           }
+
+      if(typeToOpen==ORDER_TYPE_BUY_LIMIT)
+         if(!trade.BuyLimit(lot,price,Symbol(),sl,tp,0,0,commentEA))
+           {
+            trySend++;
+            //--- сообщим о неудаче
+            Print("Метод BuyLimit() потерпел неудачу. Код возврата=",trade.ResultRetcode(),
+                  ". Описание кода: ",trade.ResultRetcodeDescription());
+           }
+         else
+           {
+            Print("Метод BuyLimit() выполнен успешно. Код возврата=",trade.ResultRetcode(),
+                  " (",trade.ResultRetcodeDescription(),")");
+            if(GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)==0)
+              {
+               GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,countEnters);
+               GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,price);
+               GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,type);
+               GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,lot);
+               GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,tp);
+               GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,sl);
+              }
+            else
+               GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)-1);
+            break;
+           }
+
+      if(typeToOpen==ORDER_TYPE_SELL_LIMIT)
+         if(!trade.SellLimit(lot,price,Symbol(),sl,tp,0,0,commentEA))
+           {
+            trySend++;
+            //--- сообщим о неудаче
+            Print("Метод SellLimit() потерпел неудачу. Код возврата=",trade.ResultRetcode(),
+                  ". Описание кода: ",trade.ResultRetcodeDescription());
+           }
+         else
+           {
+            Print("Метод SellLimit() выполнен успешно. Код возврата=",trade.ResultRetcode(),
+                  " (",trade.ResultRetcodeDescription(),")");
+            if(GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)==0)
+              {
+               GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,countEnters);
+               GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,price);
+               GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,type);
+               GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,lot);
+               GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,tp);
+               GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,sl);
+              }
+            else
+               GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)-1);
+            break;
+           }
+     }
+
+
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double GetLot(int sl)
+  {
+   sl+=(int)((SymbolInfoDouble(_Symbol,SYMBOL_ASK)-SymbolInfoDouble(_Symbol,SYMBOL_BID))/_Point);
+   double riskPerc=getRiskPercFromInput();
+   if(riskPerc==0)
+      riskPerc=riskPercInput;
+   if(minLot)
+      return SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN);
+   double depo;
+   if(AutoB)
+      depo=AccountInfoDouble(ACCOUNT_BALANCE);
+   else
+      depo=deposit;
+   double point_price=SymbolInfoDouble(Symbol(),SYMBOL_TRADE_TICK_VALUE_LOSS);
+   //Print("default_point_price: "+point_price);
+   if(_Point!=SymbolInfoDouble(Symbol(),SYMBOL_TRADE_TICK_SIZE))
+      point_price/=SymbolInfoDouble(Symbol(),SYMBOL_TRADE_TICK_SIZE);
+   double lot_tr=((depo*(riskPerc/100))/(sl*point_price));
+
+   //Print(lot_tr+" - "+depo+" - "+sl+" - "+point_price+" - "+_Point+" - "+SymbolInfoDouble(Symbol(),SYMBOL_TRADE_TICK_SIZE));
+
+   lot_tr=MathFloor(lot_tr/SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_STEP))*SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_STEP);
+   //Print("volume_step: "+SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_STEP));
+   //Print("after_correction: "+lot_tr);
+
+   if(lot_tr< SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN))
+     {
+      Alert("Рассчитанный торговый лот меньше минимально допустимого. Как следствие, риски превышают заданные в параметрах советника.");
+      lot_tr= SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MIN);
+     }
+
+   if(lot_tr> SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MAX))
+     {
+      Alert("Рассчитанный торговый лот больше максимально допустимого. Как следствие, риски ниже, чем заданные в параметрах советника.");
+      lot_tr= SymbolInfoDouble(Symbol(),SYMBOL_VOLUME_MAX);
+     }
+   return lot_tr;
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int GetSLRange()
+  {
+   double sl=-1;
+   if(typeSL==pATR)
+     {
+      sl=(slPercATR*((double)ObjectGetString(0,"11",OBJPROP_TEXT)/100));
+      //if((Digits==5 || Digits==3))
+      // sl*=10;
+     }
+
+   if(typeSL==pts)
+      sl=slPoints;
+
+   return (int)sl;
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+int GetTPRange(int sl)
+  {
+   double tp=-1;
+   if(typeTP==percATR)
+     {
+      tp=(tpPercATR*((double)ObjectGetString(0,"11",OBJPROP_TEXT)/100));
+      /*if((Digits==5 || Digits==3))
+         tp*=10;*/
+     }
+   if(typeTP==percSL)
+      tp=(int)(tpPercSL*sl/100);
+
+   if(typeTP==points)
+      tp=tpPoints;
+   return (int)tp;
+  }
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double GetPriceEdit()
+  {
+   return StringToDouble(ObjectGetString(0,"TradeHelperPriceEdit",OBJPROP_TEXT));
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+double getRiskPercFromInput()
+  {
+   //double rp;
+   //rp=(double)ObjectGetString(0,"TradeHelperRiskEdit",OBJPROP_TEXT);
+   //if(rp==0)
+	//rp=riskPercInput;
+
+   //return (double)rp;
+   return StringToDouble(ObjectGetString(0,"TradeHelperRiskEdit",OBJPROP_TEXT));
+  }
+
+color col=clrBlack;
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+
+int x_pn=5;
+int y_pn=22;
+int x_size=130;
+int y_size=21;
+int x_sizeButton=105;
+int y_sizeButton=25;
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CreateContent()
+  {
+   bool TradeHelperPriceEdit=false,TradeHelperPanel=false,TradeHelperBuyButton=false,TradeHelperSellButton=false,TradeHelperRiskEdit=false,TradeHelperResetButton=false;
+   for(int i=ObjectsTotal(0); i>=0; i--)
+     {
+      if(StringFind(ObjectName(0,i),"TradeHelperRiskEdit")!=-1)
+         TradeHelperRiskEdit=true;
+      if(StringFind(ObjectName(0,i),"TradeHelperPriceEdit")!=-1)
+         TradeHelperPriceEdit=true;
+      if(StringFind(ObjectName(0,i),"TradeHelperPanel")!=-1)
+         TradeHelperPanel=true;
+      if(StringFind(ObjectName(0,i),"TradeHelperBuyButton")!=-1)
+         TradeHelperBuyButton=true;
+      if(StringFind(ObjectName(0,i),"TradeHelperSellButton")!=-1)
+         TradeHelperSellButton=true;
+      if(StringFind(ObjectName(0,i),"TradeHelperResetButton")!=-1)
+         TradeHelperResetButton=true;
+     }
+
+   if(!TradeHelperPriceEdit)
+      EditCreate("TradeHelperPriceEdit",x_pn+90,y_pn,x_size,y_size);
+
+   if(!TradeHelperRiskEdit)
+      EditCreate("TradeHelperRiskEdit",x_pn+228,y_pn+27,x_size-58,y_size+3);
+
+   if(!TradeHelperPanel)
+      RectLabelCreate(0,"TradeHelperPanel",0,x_pn,y_pn+56,x_size+170,y_size+96,clrAliceBlue,BORDER_SUNKEN,CORNER_LEFT_UPPER,col);
+
+   if(!TradeHelperBuyButton)
+      ButtonCreate(0,"TradeHelperBuyButton",0,x_pn,y_pn+26,x_sizeButton,y_sizeButton,0,"Buy","Arial",10,col,clrSkyBlue);
+
+   if(!TradeHelperSellButton)
+      ButtonCreate(0,"TradeHelperSellButton",0,x_pn+115,y_pn+26,x_sizeButton,y_sizeButton,0,"Sell","Arial",10,col,clrCoral);
+
+   if(!TradeHelperResetButton)
+      ButtonCreate(0,"TradeHelperResetButton",0,x_pn+x_size+98,y_pn,x_sizeButton-33,y_sizeButton-3,0,"Сброс","Arial",10,col,clrAliceBlue);
+
+   double Depo;
+   if(AutoB)
+      Depo=AccountInfoDouble(ACCOUNT_BALANCE);
+   else
+      Depo=deposit;
+   if(ObjectFind(0,"TradeHelper_Deposit")==-1)
+      LabelCreate(0,"TradeHelper_Deposit",0,x_pn+8,y_pn+62,CORNER_LEFT_UPPER,"Депозит: "+DoubleToString(Depo,2)+AccountInfoString(ACCOUNT_CURRENCY),"Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+   else
+      ObjectSetText("TradeHelper_Deposit","Депозит: "+DoubleToString(Depo,2)+AccountInfoString(ACCOUNT_CURRENCY),col,"Calibri",9);
+
+   double riskPerc=getRiskPercFromInput();
+   if(ObjectFind(0,"TradeHelper_riskPerc")==-1)
+      LabelCreate(0,"TradeHelper_riskPerc",0,x_pn+8,y_pn+77,CORNER_LEFT_UPPER,"Риск на сделку в процентах: "+DoubleToString(riskPerc,2)+"%","Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+   else
+      ObjectSetText("TradeHelper_riskPerc","Риск на сделку в процентах: "+DoubleToString(riskPerc,2)+"%",col,"Calibri",9);
+
+   if(ObjectFind(0,"TradeHelper_periodATR")==-1)
+      LabelCreate(0,"TradeHelper_periodATR",0,x_pn+8,y_pn+92,CORNER_LEFT_UPPER,"Количество дней для расчёта ATR: "+IntegerToString(periodATR,2),"Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+   else
+      ObjectSetText("TradeHelper_periodATR","Количество дней для расчёта ATR: "+IntegerToString(periodATR),col,"Calibri",9);
+
+   if(ObjectFind(0,"TradeHelper_slPercATR")==-1)
+      LabelCreate(0,"TradeHelper_slPercATR",0,x_pn+8,y_pn+107,CORNER_LEFT_UPPER,"Размер SL в процентах от ATR: "+DoubleToString(slPercATR,2)+"%","Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+   else
+      ObjectSetText("TradeHelper_slPercATR","Размер SL в процентах от ATR: "+DoubleToString(slPercATR,2)+"%",col,"Calibri",9);
+
+   if(typeTP==percATR)
+     {
+      if(ObjectFind(0,"TradeHelper_typeTP")==-1)
+         LabelCreate(0,"TradeHelper_typeTP",0,x_pn+8,y_pn+122,CORNER_LEFT_UPPER,"Тип тейк-профита: проценты от ATR","Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+      else
+         ObjectSetText("TradeHelper_typeTP","Тип тейк-профита: проценты от ATR",col,"Calibri",9);
+
+      if(ObjectFind(0,"TradeHelper_tpSettings")==-1)
+         LabelCreate(0,"TradeHelper_tpSettings",0,x_pn+8,y_pn+137,CORNER_LEFT_UPPER,"Размер TP в процентах от ATR: "+DoubleToString(tpPercATR,2)+"%","Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+      else
+         ObjectSetText("TradeHelper_tpSettings","Размер TP в процентах от ATR: "+DoubleToString(tpPercATR,2)+"%",col,"Calibri",9);
+     }
+   if(typeTP==percSL)
+     {
+      if(ObjectFind(0,"TradeHelper_typeTP")==-1)
+         LabelCreate(0,"TradeHelper_typeTP",0,x_pn+8,y_pn+122,CORNER_LEFT_UPPER,"Тип тейк-профита: проценты от SL","Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+      else
+         ObjectSetText("TradeHelper_typeTP","Тип тейк-профита: проценты от SL",col,"Calibri",9);
+
+      if(ObjectFind(0,"TradeHelper_tpSettings")==-1)
+         LabelCreate(0,"TradeHelper_tpSettings",0,x_pn+8,y_pn+137,CORNER_LEFT_UPPER,"Размер TP в процентах от SL: "+DoubleToString(tpPercSL,2)+"%","Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+      else
+         ObjectSetText("TradeHelper_tpSettings","Размер TP в процентах от SL: "+DoubleToString(tpPercSL,2)+"%",col,"Calibri",9);
+     }
+   if(typeTP==points)
+     {
+      if(ObjectFind(0,"TradeHelper_typeTP")==-1)
+         LabelCreate(0,"TradeHelper_typeTP",0,x_pn+8,y_pn+122,CORNER_LEFT_UPPER,"Тип тейк-профита: пункты","Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+      else
+         ObjectSetText("TradeHelper_typeTP","Тип тейк-профита: пункты",col,"Calibri",9);
+
+      double tpp4=tpPoints;
+      if(Digits()==5||Digits()==3)
+         tpp4*=0.1;
+      if(ObjectFind(0,"TradeHelper_tpSettings")==-1)
+         LabelCreate(0,"TradeHelper_tpSettings",0,x_pn+8,y_pn+137,CORNER_LEFT_UPPER,"Размер тейк-профита в пунктах: "+DoubleToString(tpp4,1),"Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+      else
+         ObjectSetText("TradeHelper_tpSettings","Размер тейк-профита в пунктах: "+DoubleToString(tpp4,1),col,"Calibri",9);
+     }
+
+   if(ObjectFind(0,"TradeHelper_countEnters")==-1)
+      LabelCreate(0,"TradeHelper_countEnters",0,x_pn+8,y_pn+152,CORNER_LEFT_UPPER,"Количество повторных входов: "+IntegerToString(countEnters,2),"Calibri",9,clrBlack,0.0,ANCHOR_LEFT_UPPER,false);
+   else
+      ObjectSetText("TradeHelper_countEnters","Количество повторных входов: "+IntegerToString(countEnters),col,"Calibri",9);
+
+  }
+
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CreateHide()
+  {
+   ObjectCreate(0,"TrHelperButton_hide",OBJ_BUTTON,0,0,0);
+   ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_XSIZE,80);
+   ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_YSIZE,20);
+   ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_XDISTANCE,5);
+   ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_YDISTANCE,22);
+   ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_BGCOLOR,Gray);
+   ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_STATE,false);
+   ObjectSetText("TrHelperButton_hide","Свернуть",clrBlack,"Arial");
+   ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_COLOR,White);
+   ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_FONTSIZE,9);
+   ObjectSetInteger(0,"TrHelperButton_hide", OBJPROP_CORNER, CORNER_LEFT_UPPER);
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void CallIndAtr()
+  {
+   ATR_D=0;
+   string text="_Point - "+DoubleToString(_Point)+"\n\n";
+   for(int i=1; i<=periodATR; i++)
+     {
+      /* text+="High на свече "+i+": "+DoubleToString(iHigh(NULL,PERIOD_D1,i),Digits())+"\n";
+       text+="Low на свече "+i+": "+DoubleToString(iLow(NULL,PERIOD_D1,i),Digits())+"\n";
+       text+="Разница на свече "+i+": "+DoubleToString((iHigh(NULL,PERIOD_D1,i)-iLow(NULL,PERIOD_D1,i)),Digits())+"\n";
+       text+="Разница на свече "+i+" после деления на _Point: "+((int)MathRound((iHigh(NULL,PERIOD_D1,i)-iLow(NULL,PERIOD_D1,i))/pips))+"\n";*/
+      ATR_D=ATR_D+(int)MathRound((iHigh(NULL,PERIOD_D1,i)-iLow(NULL,PERIOD_D1,i))/pips);
+      text+="\n";
+     }
+
+   ATR_D=ATR_D/periodATR;
+//text+="Среднее значение: "+ATR_D;
+// Comment(text);
+
+// RefreshRates();
+// WindowRedraw();
+   ChartRedraw();
+
+   int t,h,m,s;
+   t=(int)(MathAbs((iTime(Symbol(),workTF,0)+workTF*60)-TimeCurrent()));
+
+   s=t;
+   h=(int)round(t/3600);
+   m=s/60;
+
+   m=(s-(s/60))/60;
+
+   string tt=TimeToString(t,TIME_SECONDS);
+   ObjectCreate(0,"11",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"22",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"33",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"44",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"55",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"66",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"77",OBJ_LABEL,0,0,0);
+
+   ObjectCreate(0,"1",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"2",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"3",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"4",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"5",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"6",OBJ_LABEL,0,0,0);
+   ObjectCreate(0,"7",OBJ_LABEL,0,0,0);
+
+   ObjectSetText("1","ATR Day("+(string)periodATR+") :",indColor4,"Arial",font_size1);
+
+   ObjectSetText("2","пройдено ATR :",indColor3,"Arial",font_size1);
+   ObjectSetText("3","доступно ATR :",indColor3,"Arial",font_size1);
+   ObjectSetText("4","time :",indColor1,"Arial",font_size1);
+   ObjectSetText("5","Spread :",indColor2,"Arial",font_size1);
+   ObjectSetText("6","SL :",indColor5,"Arial",font_size1);
+   ObjectSetText("7","TP :",indColor5,"Arial",font_size1);
+
+   ObjectSetText("11",(string)ATR_D,indColor4,"Arial",font_size1);
+   ObjectSetText("22","("+DoubleToString(MathRound((iHigh(NULL,PERIOD_D1,0)-iLow(NULL,PERIOD_D1,0))/pips)*100/ATR_D,0)+"%)"+DoubleToString(MathRound((iHigh(NULL,PERIOD_D1,0)-iLow(NULL,PERIOD_D1,0))/pips),0),indColor3,"Arial",font_size1);
+   ObjectSetText("33","("+DoubleToString((ATR_D -MathRound((iHigh(NULL,PERIOD_D1,0)-iLow(NULL,PERIOD_D1,0))/pips))*100/ATR_D,0)+"%)"+DoubleToString(ATR_D-MathRound((iHigh(NULL,PERIOD_D1,0)-iLow(NULL,PERIOD_D1,0))/pips),0),indColor3,"Arial",font_size1);
+   ObjectSetText("44",tt,indColor1,"Arial",font_size1);
+   ObjectSetText("55",DoubleToString(SymbolInfoInteger(Symbol(),SYMBOL_SPREAD)*0.1,2),indColor2,"Trebuchet MS",font_size1);
+   ObjectSetText("66",DoubleToString(ATR_D*slPercATR/100,0),indColor5,"Trebuchet MS",font_size1);
+   ObjectSetText("77",DoubleToString(ATR_D*slPercATR/100*TP,0),indColor5,"Trebuchet MS",font_size1);
+
+   ObjectSetInteger(0,"11", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"22", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"33", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"44", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"55", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"66",OBJPROP_CORNER,CORNER_RIGHT_UPPER);
+   ObjectSetInteger(0,"77",OBJPROP_CORNER,CORNER_RIGHT_UPPER);
+
+   ObjectSetInteger(0,"1", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"2", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"3", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"4", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"5", OBJPROP_CORNER, CORNER_RIGHT_UPPER);    // Привязка угол
+   ObjectSetInteger(0,"6",OBJPROP_CORNER,CORNER_RIGHT_UPPER);
+   ObjectSetInteger(0,"7",OBJPROP_CORNER,CORNER_RIGHT_UPPER);
+
+   ObjectSetInteger(0,"11",OBJPROP_YDISTANCE,font_size1+9);// Координата Y
+   ObjectSetInteger(0,"22", OBJPROP_YDISTANCE, (font_size1+9)*2);// Координата Y
+   ObjectSetInteger(0,"33", OBJPROP_YDISTANCE, (font_size1+9)*3);// Координата Y
+   ObjectSetInteger(0,"44", OBJPROP_YDISTANCE, (font_size1+9)*4);// Координата Y
+   ObjectSetInteger(0,"55", OBJPROP_YDISTANCE, (font_size1+9)*5);// Координата Y
+   ObjectSetInteger(0,"66",OBJPROP_YDISTANCE,(font_size1+9)*6);
+   ObjectSetInteger(0,"77",OBJPROP_YDISTANCE,(font_size1+9)*7);
+
+   ObjectSetInteger(0,"1",OBJPROP_YDISTANCE,font_size1+9);// Координата Y
+   ObjectSetInteger(0,"2", OBJPROP_YDISTANCE, (font_size1+9)*2);// Координата Y
+   ObjectSetInteger(0,"3", OBJPROP_YDISTANCE, (font_size1+9)*3);// Координата Y
+   ObjectSetInteger(0,"4", OBJPROP_YDISTANCE, (font_size1+9)*4);// Координата Y
+   ObjectSetInteger(0,"5", OBJPROP_YDISTANCE, (font_size1+9)*5);// Координата Y
+   ObjectSetInteger(0,"6",OBJPROP_YDISTANCE,(font_size1+9)*6);
+   ObjectSetInteger(0,"7",OBJPROP_YDISTANCE,(font_size1+9)*7);
+
+   ObjectSetInteger(0,"11", OBJPROP_XDISTANCE, 80);// Координата Х
+   ObjectSetInteger(0,"22", OBJPROP_XDISTANCE, 80);// Координата Х
+   ObjectSetInteger(0,"33", OBJPROP_XDISTANCE, 80);// Координата Х
+   ObjectSetInteger(0,"44", OBJPROP_XDISTANCE, 80);// Координата Х
+   ObjectSetInteger(0,"55", OBJPROP_XDISTANCE, 80);// Координата Х
+   ObjectSetInteger(0,"66",OBJPROP_XDISTANCE,80);
+   ObjectSetInteger(0,"77",OBJPROP_XDISTANCE,80);
+
+   ObjectSetInteger(0,"1", OBJPROP_XDISTANCE, 220);// Координата Х
+   ObjectSetInteger(0,"2", OBJPROP_XDISTANCE, 220);// Координата Х
+   ObjectSetInteger(0,"3", OBJPROP_XDISTANCE, 220);// Координата Х
+   ObjectSetInteger(0,"4", OBJPROP_XDISTANCE, 220);// Координата Х
+   ObjectSetInteger(0,"5", OBJPROP_XDISTANCE, 220);// Координата Х
+   ObjectSetInteger(0,"6",OBJPROP_XDISTANCE,220);
+   ObjectSetInteger(0,"7",OBJPROP_XDISTANCE,220);
+
+//--- включим (true) или отключим (false) режим перемещения метки мышью
+   ObjectSetInteger(0,"1",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"2",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"3",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"4",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"5",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"6",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"7",OBJPROP_SELECTABLE,false);
+
+   ObjectSetInteger(0,"11",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"22",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"33",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"44",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"55",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"66",OBJPROP_SELECTABLE,false);
+   ObjectSetInteger(0,"77",OBJPROP_SELECTABLE,false);
+
+   ObjectSetInteger(0,"1",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"2",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"3",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"4",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"5",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"6",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"7",OBJPROP_SELECTED,false);
+
+   ObjectSetInteger(0,"11",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"22",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"33",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"44",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"55",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"66",OBJPROP_SELECTED,false);
+   ObjectSetInteger(0,"77",OBJPROP_SELECTED,false);
+  }
+//|                                                                  |
+//+------------------------------------------------------------------+
+void ObjectSetText(string objName,string text,color clr,string font="Arial",int fs=11)//,font_size1,"Arial",indColor3)
+  {
+   ObjectSetString(0,objName,OBJPROP_TEXT,text);
+   ObjectSetInteger(0,objName,OBJPROP_CORNER,CORNER_RIGHT_UPPER);
+   ObjectSetString(0,objName,OBJPROP_FONT,font);
+   ObjectSetInteger(0,objName,OBJPROP_FONTSIZE,fs);
+   ObjectSetInteger(0,objName,OBJPROP_COLOR,clr);
+  }
+//+------------------------------------------------------------------+
+
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool EditCreate(string name,const int              x=0,// координата по оси X
+                const int              y=0,                      // координата по оси Y
+                const int              width=50,                 // ширина
+                const int              height=18                // высота
+               )
+  {
+   ResetLastError();
+   int chart_ID=0;
+   if(!ObjectCreate(0,name,OBJ_EDIT,0,0,0))
+     {
+      /*   Print(__FUNCTION__,
+                  ": не удалось создать объект \"Поле ввода\"! Код ошибки = ",GetLastError());*/
+      return(false);
+     }
+   ObjectSetInteger(chart_ID,name,OBJPROP_XDISTANCE,x);
+   ObjectSetInteger(chart_ID,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(chart_ID,name,OBJPROP_XSIZE,width);
+   ObjectSetInteger(chart_ID,name,OBJPROP_YSIZE,height);
+   ObjectSetInteger(chart_ID,name,OBJPROP_READONLY,false);
+   if(name=="TradeHelperPriceEdit")
+     {
+      if(!WorkWithLinesEnabled || useATRinput)
+         ObjectSetString(chart_ID,name,OBJPROP_TEXT,"Введите цену");
+      else
+        {
+         ObjectSetString(chart_ID,name,OBJPROP_TEXT,"Работа по линиям");
+         ObjectSetInteger(chart_ID,name,OBJPROP_READONLY,true);
+        }
+     }
+   else
+      ObjectSetString(chart_ID,name,OBJPROP_TEXT,(string)riskPercParamether);
+   ObjectSetString(chart_ID,name,OBJPROP_FONT,"Arial");
+   ObjectSetInteger(chart_ID,name,OBJPROP_FONTSIZE,10);
+   ObjectSetInteger(chart_ID,name,OBJPROP_COLOR,White);
+   ObjectSetInteger(chart_ID,name,OBJPROP_BGCOLOR,Black);
+   ObjectSetInteger(chart_ID,name,OBJPROP_BORDER_COLOR,Gray);
+   ObjectSetInteger(chart_ID,name,OBJPROP_SELECTABLE,0);
+   return true;
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool ButtonCreate(const long              chart_ID=0,               // ID графика
+                  const string            name="Button",            // имя кнопки
+                  const int               sub_window=0,             // номер подокна
+                  const int               x=0,                      // координата по оси X
+                  const int               y=0,                      // координата по оси Y
+                  const int               width=50,                 // ширина кнопки
+                  const int               height=18,                // высота кнопки
+                  const ENUM_BASE_CORNER  corner=CORNER_LEFT_UPPER, // угол графика для привязки
+                  const string            text="Button",            // текст
+                  const string            font="Arial",             // шрифт
+                  const int               font_size=10,             // размер шрифта
+                  const color             clr=clrBlack,             // цвет текста
+                  const color             back_clr=C'236,233,216',  // цвет фона
+                  const color             border_clr=clrNONE,       // цвет границы
+                  const bool              state=false,              // нажата/отжата
+                  const bool              back=false,               // на заднем плане
+                  const bool              selection=false,          // выделить для перемещений
+                  const bool              hidden=true,              // скрыт в списке объектов
+                  const long              z_order=0)                // приоритет на нажатие мышью
+  {
+//--- сбросим значение ошибки
+   ResetLastError();
+//--- создадим кнопку
+   if(!ObjectCreate(chart_ID,name,OBJ_BUTTON,sub_window,0,0))
+     {
+      Print(__FUNCTION__,
+            ": не удалось создать кнопку! Код ошибки = ",GetLastError());
+      return(false);
+     }
+//--- установим координаты кнопки
+   ObjectSetInteger(chart_ID,name,OBJPROP_XDISTANCE,x);
+   ObjectSetInteger(chart_ID,name,OBJPROP_YDISTANCE,y);
+//--- установим размер кнопки
+   ObjectSetInteger(chart_ID,name,OBJPROP_XSIZE,width);
+   ObjectSetInteger(chart_ID,name,OBJPROP_YSIZE,height);
+//--- установим угол графика, относительно которого будут определяться координаты точки
+   ObjectSetInteger(chart_ID,name,OBJPROP_CORNER,corner);
+//--- установим текст
+   ObjectSetString(chart_ID,name,OBJPROP_TEXT,text);
+//--- установим шрифт текста
+   ObjectSetString(chart_ID,name,OBJPROP_FONT,font);
+//--- установим размер шрифта
+   ObjectSetInteger(chart_ID,name,OBJPROP_FONTSIZE,font_size);
+//--- установим цвет текста
+   ObjectSetInteger(chart_ID,name,OBJPROP_COLOR,clr);
+//--- установим цвет фона
+   ObjectSetInteger(chart_ID,name,OBJPROP_BGCOLOR,back_clr);
+//--- установим цвет границы
+   ObjectSetInteger(chart_ID,name,OBJPROP_BORDER_COLOR,border_clr);
+//--- отобразим на переднем (false) или заднем (true) плане
+   ObjectSetInteger(chart_ID,name,OBJPROP_BACK,back);
+//--- переведем кнопку в заданное состояние
+   ObjectSetInteger(chart_ID,name,OBJPROP_STATE,state);
+//--- включим (true) или отключим (false) режим перемещения кнопки мышью
+   ObjectSetInteger(chart_ID,name,OBJPROP_SELECTABLE,selection);
+   ObjectSetInteger(chart_ID,name,OBJPROP_SELECTED,selection);
+//--- скроем (true) или отобразим (false) имя графического объекта в списке объектов
+   ObjectSetInteger(chart_ID,name,OBJPROP_HIDDEN,hidden);
+//--- установим приоритет на получение события нажатия мыши на графике
+   ObjectSetInteger(chart_ID,name,OBJPROP_ZORDER,z_order);
+//--- успешное выполнение
+   return(true);
+  }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool RectLabelCreate(const long             chart_ID=0,// ID графика
+                     const string           name="RectLabel",         // имя метки
+                     const int              sub_window=0,             // номер подокна
+                     const int              x=0,                      // координата по оси X
+                     const int              y=0,                      // координата по оси Y
+                     const int              width=100,// ширина
+                     const int              height=28,                // высота
+                     const color            back_clr=C'236,233,216',  // цвет фона
+                     const ENUM_BORDER_TYPE border=BORDER_SUNKEN,     // тип границы
+                     const ENUM_BASE_CORNER corner=CORNER_LEFT_UPPER, // угол графика для привязки
+                     const color            clr=clrRed,               // цвет плоской границы (Flat)
+                     const ENUM_LINE_STYLE  style=STYLE_SOLID,        // стиль плоской границы
+                     const int              line_width=1,             // толщина плоской границы
+                     const bool             back=true,// на заднем плане
+                     const bool             selection=false,          // выделить для перемещений
+                     const bool             hidden=true,              // скрыт в списке объектов
+                     const long             z_order=0)                // приоритет на нажатие мышью
+  {
+//--- сбросим значение ошибки
+   ResetLastError();
+//--- создадим прямоугольную метку
+   if(ObjectFind(0,name)==-1)
+      ObjectCreate(chart_ID,name,OBJ_RECTANGLE_LABEL,sub_window,0,0);
+
+   ObjectSetInteger(chart_ID,name,OBJPROP_XDISTANCE,x);              // установим координаты метки
+   ObjectSetInteger(chart_ID,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(chart_ID,name,OBJPROP_XSIZE,width);              // установим размеры метки
+   ObjectSetInteger(chart_ID,name,OBJPROP_YSIZE,height);
+   ObjectSetInteger(chart_ID,name,OBJPROP_BGCOLOR,back_clr);         // установим цвет фона
+   ObjectSetInteger(chart_ID,name,OBJPROP_BORDER_TYPE,border);       // установим тип границы
+   ObjectSetInteger(chart_ID,name,OBJPROP_CORNER,corner);            // установим угол графика, относительно которого будут определяться координаты точки
+   ObjectSetInteger(chart_ID,name,OBJPROP_COLOR,clr);                // установим цвет плоской рамки (в режиме Flat)
+   ObjectSetInteger(chart_ID,name,OBJPROP_STYLE,style);              // установим стиль линии плоской рамки
+   ObjectSetInteger(chart_ID,name,OBJPROP_WIDTH,line_width);         // установим толщину плоской границы
+   ObjectSetInteger(chart_ID,name,OBJPROP_BACK,false);                // отобразим на переднем (false) или заднем (true) плане
+   ObjectSetInteger(chart_ID,name,OBJPROP_SELECTABLE,selection);     // включим (true) или отключим (false) режим перемещения метки мышью
+   ObjectSetInteger(chart_ID,name,OBJPROP_SELECTED,selection);
+   ObjectSetInteger(chart_ID,name,OBJPROP_HIDDEN,hidden);            // скроем (true) или отобразим (false) имя графического объекта в списке объектов
+   ObjectSetInteger(chart_ID,name,OBJPROP_ZORDER,z_order);           // установим приоритет на получение события нажатия мыши на графике
+
+//--- успешное выполнение
+   return(true);
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool LabelCreate(const long              chart_ID=0,// ID графика
+                 const string            name="Label",             // имя метки
+                 const int               sub_window=0,             // номер подокна
+                 const int               x=0,                      // координата по оси X
+                 const int               y=0,                      // координата по оси Y
+                 const ENUM_BASE_CORNER  corner=CORNER_LEFT_UPPER, // угол графика для привязки
+                 const string            text="Label",             // текст
+                 const string            font1="Arial",// шрифт
+                 const int               font_size=10,             // размер шрифта
+                 const color             clr=clrRed,               // цвет
+                 const double            angle=0.0,                // наклон текста
+                 const ENUM_ANCHOR_POINT anchor=ANCHOR_LEFT_UPPER, // способ привязки
+                 const bool              back=false,               // на заднем плане
+                 const bool              selection=false,          // выделить для перемещений
+                 const bool              hidden=true,              // скрыт в списке объектов
+                 const long              z_order=0)                // приоритет на нажатие мышью
+  {
+//--- сбросим значение ошибки
+   ResetLastError();
+//--- создадим текстовую метку
+   if(ObjectFind(chart_ID,name)==-1)
+      ObjectCreate(chart_ID,name,OBJ_LABEL,sub_window,0,0);
+
+   ObjectSetInteger(chart_ID,name,OBJPROP_XDISTANCE,x);           // установим координаты метки
+   ObjectSetInteger(chart_ID,name,OBJPROP_YDISTANCE,y);
+   ObjectSetInteger(chart_ID,name,OBJPROP_CORNER,corner);         // установим угол графика, относительно которого будут определяться координаты точки
+   ObjectSetString(chart_ID,name,OBJPROP_TEXT,text);              // установим текст
+   ObjectSetString(chart_ID,name,OBJPROP_FONT,font1);              // установим шрифт текста
+   ObjectSetInteger(chart_ID,name,OBJPROP_FONTSIZE,font_size);    // установим размер шрифта
+   ObjectSetDouble(chart_ID,name,OBJPROP_ANGLE,angle);            // установим угол наклона текста
+   ObjectSetInteger(chart_ID,name,OBJPROP_ANCHOR,anchor);         // установим способ привязки
+   ObjectSetInteger(chart_ID,name,OBJPROP_COLOR,clr);             // установим цвет
+   ObjectSetInteger(chart_ID,name,OBJPROP_BACK,back);             // отобразим на переднем (false) или заднем (true) плане
+   ObjectSetInteger(chart_ID,name,OBJPROP_SELECTABLE,selection);  // включим (true) или отключим (false) режим перемещения метки мышью
+   ObjectSetInteger(chart_ID,name,OBJPROP_SELECTED,selection);
+   ObjectSetInteger(chart_ID,name,OBJPROP_HIDDEN,hidden);         // скроем (true) или отобразим (false) имя графического объекта в списке объектов
+   ObjectSetInteger(chart_ID,name,OBJPROP_ZORDER,z_order);        // установим приоритет на получение события нажатия мыши на графике
+
+//--- успешное выполнение
+   return(true);
+  }
+//+------------------------------------------------------------------+
+
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id,const long &lparam,const double &dparam,const string &sparam)
+  {
+   if(id==CHARTEVENT_OBJECT_CLICK)
+     {
+      string clickedChartObject=sparam;
+
+      if(clickedChartObject=="TrHelperButton_hide")
+         PressHide();
+
+      if(clickedChartObject=="TradeHelperBuyButton")
+         BuySellButtonPressed(OP_BUY);
+
+      if(clickedChartObject=="TradeHelperSellButton")
+         BuySellButtonPressed(OP_SELL);
+
+      if(clickedChartObject=="TradeHelperResetButton")
+        {
+         GlobalVariableDel("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN);
+         GlobalVariableDel("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN);
+         if(GlobalVariableGet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperCountOrdersToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperPriceToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperTypeToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperLotToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperTPToReopen_"+Symbol()+"_"+(string)MN,0);
+         if(GlobalVariableGet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN)<=0)
+            GlobalVariableSet("TradeHelperSLToReopen_"+Symbol()+"_"+(string)MN,0);
+
+         GlobalVariableSet("TradeHelperATRInputType_"+Symbol()+"_"+(string)MN,-1);
+         GlobalVariableSet("TradeHelperATRInputPrice_"+Symbol()+"_"+(string)MN,-1);
+         GlobalVariableSet("TradeHelperATRInputStartPrice_"+Symbol()+"_"+(string)MN,-1);
+         GlobalVariableSet("TradeHelperATROrderPrice_"+Symbol()+"_"+(string)MN,-1);
+
+         Sleep(120);
+         ObjectSetInteger(0,"TradeHelperResetButton",OBJPROP_STATE,false);
+        }
+     }
+
+   /*if(id==CHARTEVENT_CLICK)
+     {
+      Print("Координаты щелчка мышки на графике: x = ",lparam,"  y = ",dparam);
+     }*/
+   if(id==CHARTEVENT_KEYDOWN)
+     {
+      switch(int(lparam))
+        {
+         case KEY_5:
+           {
+            if(ObjectFind(0,"ATR_H")!=-1)
+              {
+               ObjectDelete(0,"ATR_H");
+               ObjectDelete(0,"ATR_L");
+               ObjectDelete(0,"ATR_H1");
+               ObjectDelete(0,"ATR_L1");
+              }
+            else
+              {
+               int kof=1;
+               if((Digits()==5) || (Digits()==3))
+                  kof=kof*10;
+               ObjectCreate(0,"ATR_H",OBJ_TREND,0,iTime(Symbol(),PERIOD_D1,0),iLow(Symbol(),PERIOD_D1,0)+(double)ObjectGetString(0,"11",OBJPROP_TEXT)*_Point*kof,iTime(Symbol(),PERIOD_D1,0)+86400,iLow(Symbol(),PERIOD_D1,0)+(double)ObjectGetString(0,"11",OBJPROP_TEXT)*_Point*kof);
+               ObjectCreate(0,"ATR_L",OBJ_TREND,0,iTime(Symbol(),PERIOD_D1,0),iHigh(Symbol(),PERIOD_D1,0)-(double)ObjectGetString(0,"11",OBJPROP_TEXT)*_Point*kof,iTime(Symbol(),PERIOD_D1,0)+86400,iHigh(Symbol(),PERIOD_D1,0)-(double)ObjectGetString(0,"11",OBJPROP_TEXT)*_Point*kof);
+               ObjectSetInteger(0,"ATR_H",OBJPROP_STYLE,STYLE_DOT);
+               ObjectSetInteger(0,"ATR_L",OBJPROP_STYLE,STYLE_DOT);
+               ObjectSetInteger(0,"ATR_H",OBJPROP_RAY_RIGHT,false);
+               ObjectSetInteger(0,"ATR_L",OBJPROP_RAY_RIGHT,false);
+               ObjectSetInteger(0,"ATR_H",OBJPROP_HIDDEN,false);
+               ObjectSetInteger(0,"ATR_L",OBJPROP_HIDDEN,false);
+               ObjectSetInteger(0,"ATR_H",OBJPROP_SELECTABLE,false);
+               ObjectSetInteger(0,"ATR_L",OBJPROP_SELECTED,false);
+               ObjectSetInteger(0,"ATR_H",OBJPROP_SELECTABLE,false);
+               ObjectSetInteger(0,"ATR_L",OBJPROP_SELECTED,false);
+               ObjectSetInteger(0,"ATR_H",OBJPROP_COLOR,clrGreen);
+               ObjectSetInteger(0,"ATR_L",OBJPROP_COLOR,clrRed);
+               ObjectCreate(0,"ATR_H1",OBJ_TREND,0,iTime(Symbol(),PERIOD_D1,0),iLow(Symbol(),PERIOD_D1,0)+(double)ObjectGetString(0,"11",OBJPROP_TEXT)*_Point*0.75*kof,iTime(Symbol(),PERIOD_D1,0)+86400,iLow(Symbol(),PERIOD_D1,0)+(double)ObjectGetString(0,"11",OBJPROP_TEXT)*_Point*kof*0.75);
+               ObjectCreate(0,"ATR_L1",OBJ_TREND,0,iTime(Symbol(),PERIOD_D1,0),iHigh(Symbol(),PERIOD_D1,0)-(double)ObjectGetString(0,"11",OBJPROP_TEXT)*_Point*0.75*kof,iTime(Symbol(),PERIOD_D1,0)+86400,iHigh(Symbol(),PERIOD_D1,0)-(double)ObjectGetString(0,"11",OBJPROP_TEXT)*_Point*kof*0.75);
+               ObjectSetInteger(0,"ATR_H1",OBJPROP_STYLE,STYLE_DASHDOT);
+               ObjectSetInteger(0,"ATR_L1",OBJPROP_STYLE,STYLE_DASHDOT);
+               ObjectSetInteger(0,"ATR_H1",OBJPROP_RAY_RIGHT,false);
+               ObjectSetInteger(0,"ATR_L1",OBJPROP_RAY_RIGHT,false);
+               ObjectSetInteger(0,"ATR_H1",OBJPROP_HIDDEN,false);
+               ObjectSetInteger(0,"ATR_L1",OBJPROP_HIDDEN,false);
+               ObjectSetInteger(0,"ATR_H1",OBJPROP_SELECTABLE,false);
+               ObjectSetInteger(0,"ATR_L1",OBJPROP_SELECTED,false);
+               ObjectSetInteger(0,"ATR_H1",OBJPROP_SELECTABLE,false);
+               ObjectSetInteger(0,"ATR_L1",OBJPROP_SELECTED,false);
+               ObjectSetInteger(0,"ATR_H1",OBJPROP_COLOR,clrGreen);
+               ObjectSetInteger(0,"ATR_L1",OBJPROP_COLOR,clrRed);
+              }
+
+           }
+         break;
+            /* default:
+                Print("Нажата какая-то неперечисленная клавиша");*/
+        }
+     }
+  }
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+void PressHide()
+  {
+   if(!ObjectGetInteger(0,"TrHelperButton_hide",OBJPROP_STATE))
+     {
+      ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_BGCOLOR,Gray);
+      ObjectSetText("TrHelperButton_hide","Свернуть",6,"Arial",clrBlack);
+      ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_COLOR,White);
+      ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_READONLY,false);
+      ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_FONTSIZE,9);
+      ObjectSetInteger(0,"TrHelperButton_hide", OBJPROP_CORNER, CORNER_LEFT_UPPER);
+
+      if(hidedPanel)
+         CreateContent();
+      hidedPanel=false;
+     }
+   else
+     {
+      riskPercParamether=getRiskPercFromInput();
+      ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_BGCOLOR,Gray);
+      ObjectSetText("TrHelperButton_hide","Развернуть",6,"Arial",clrBlack);
+      ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_COLOR,White);
+      ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_READONLY,false);
+      ObjectSetInteger(0,"TrHelperButton_hide",OBJPROP_FONTSIZE,9);
+      ObjectSetInteger(0,"TrHelperButton_hide", OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      hidedPanel=true;
+     }
+   if(hidedPanel==true)
+     {
+      for(int i=ObjectsTotal(0); i>=0; i--)
+         if(StringFind(ObjectName(0,i),"TradeHelper")!=-1)
+            ObjectDelete(0,ObjectName(0,i));
+     }
+  }
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//|                                                                  |
+//+------------------------------------------------------------------+
+bool ButtonPressed(string name)
+  {
+   if(ObjectGetInteger(0,name,OBJPROP_STATE))
+     {
+      return true;
+     }
+
+   return false;
+  }
+//+------------------------------------------------------------------+
