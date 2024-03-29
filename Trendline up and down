@@ -1,0 +1,227 @@
+#property copyright "Copyright 2024, MetaQuotes Ltd."
+#property link      "https://www.mql5.com"
+#property version   "1.00"
+#property strict
+// Input parameters
+extern double StopLoss_ATR_Multiplier = 15;  // Стоп Лосс Процент АТР
+extern double TakeProfit_ATR_Multiplier = 75; //Тейк Профит Процент АТР
+extern int ATR_Period = 14;
+extern double Risk_Percent = 10.0;
+extern double ATR_Percent = 1.0; // Процент от ATR для установки цены продажи
+extern double Breakeven_ATR_Multiplier = 1.0; // Процент от ATR для перевода ордера в безубыток
+extern ENUM_TIMEFRAMES UserTimeframe = PERIOD_H1; // Таймфрейм, выбранный пользователем
+
+extern int MagicNumber = 123456;
+bool PriceReachedThreshold = false;
+bool OrderOpenedAtSellPrice = false;
+bool FirstOrderClosed = false;
+bool TakeProfitHit = false; // Флаг для отслеживания, был ли получен тейк-профит
+int EntryCount = 0;
+extern int MaxEntries = 10; // Пользователь выбирает максимальное количество сделок
+
+bool IsAnyOrderOpen()
+  {
+   for(int i = OrdersTotal()-1; i >= 0; i--)
+     {
+      if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+        {
+         if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
+           {
+            Print("Найден открытый ордер");
+            return true;
+           }
+        }
+     }
+   Print("Открытых ордеров не найдено");
+   return false;
+  }
+
+bool IsOrderClosed()
+  {
+   for(int i = OrdersHistoryTotal()-1; i >= 0; i--)
+     {
+      if(OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
+        {
+         if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
+           {
+            Print("Найден закрытый ордер");
+            // Проверяем, был ли ордер закрыт по тейк-профиту
+            if(OrderClosePrice() >= OrderTakeProfit())
+              {
+               TakeProfitHit = true;
+              }
+            return true;
+           }
+        }
+     }
+   Print("Закрытых ордеров не найдено");
+   return false;
+  }
+
+void OnTick()
+  {
+   if(EntryCount >= MaxEntries || TakeProfitHit) // Если был получен тейк-профит, прекращаем работу
+     {
+      Print("Достигнуто максимальное количество сделок или был получен тейк-профит");
+      return;
+     }
+
+   int Digits = MarketInfo(Symbol(), MODE_DIGITS);
+   string TrendLineNameShort = "short";
+   string TrendLineNameLong = "long";
+   if(ObjectFind(TrendLineNameShort) == -1 || ObjectFind(TrendLineNameLong) == -1)
+     {
+      Print("Trend line does not exist");
+      return;
+     }
+   double SellPrice = NormalizeDouble(ObjectGetValueByShift(TrendLineNameShort, 0), Digits);
+   double BuyPrice = NormalizeDouble(ObjectGetValueByShift(TrendLineNameLong, 0), Digits);
+   if(IsAnyOrderOpen())
+     {
+      // Проверяем, достигла ли цена уровня безубытка
+      for(int i = OrdersTotal()-1; i >= 0; i--)
+        {
+         if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+           {
+            if(OrderSymbol() == Symbol() && OrderMagicNumber() == MagicNumber)
+              {
+               double ATR = iATR(Symbol(), PERIOD_D1, ATR_Period, 1);
+               double Breakeven_Level;
+               if(OrderType() == OP_SELL)
+                 {
+                  Breakeven_Level = OrderOpenPrice() - ATR * (Breakeven_ATR_Multiplier/100);
+                  if(Bid <= Breakeven_Level)
+                    {
+                     // Переводим ордер в безубыток
+                     bool result = OrderModify(OrderTicket(), OrderOpenPrice(), OrderOpenPrice(), OrderTakeProfit(), 0);
+                     if(!result)
+                       {
+                        Print("OrderModify failed with error #", GetLastError());
+                       }
+                    }
+                 }
+               else if(OrderType() == OP_BUY)
+                 {
+                  Breakeven_Level = OrderOpenPrice() + ATR * (Breakeven_ATR_Multiplier/100);
+                  if(Ask >= Breakeven_Level)
+                    {
+                     // Переводим ордер в безубыток
+                     bool result = OrderModify(OrderTicket(), OrderOpenPrice(), OrderOpenPrice(), OrderTakeProfit(), 0);
+                     if(!result)
+                       {
+                        Print("OrderModify failed with error #", GetLastError());
+                       }
+                    }
+                 }
+              }
+           }
+        }
+      return;
+     }
+   if(IsOrderClosed())
+     {
+      Sleep(1000); // Добавлено задержка
+      if(IsAnyOrderOpen())
+        {
+         return;
+        }
+      OrderOpenedAtSellPrice = false;
+      FirstOrderClosed = true;
+
+      // Проверьте, была ли сделка закрыта по стопу
+      if(OrderClosePrice() <= OrderStopLoss())
+        {
+          // Запустите скрипт или функцию для открытия новой сделки
+          // OpenNewTrade(); // замените на вашу функцию
+          Print("Первый ордер закрыт по стопу. Запускаем новую сделку.");
+        }
+     }
+
+   double ATR = iATR(Symbol(), PERIOD_D1, ATR_Period, 1);
+   double SellThreshold = SellPrice + ATR * (ATR_Percent/100);
+   double BuyThreshold = BuyPrice - ATR * (ATR_Percent/100);
+   if(Bid >= SellThreshold && EntryCount == 0)
+     {
+      PriceReachedThreshold = true;
+     }
+   else if(Ask <= BuyThreshold && EntryCount == 0)
+     {
+      PriceReachedThreshold = true;
+     }
+   double deviation = ATR * 0.01; // допустимое отклонение в 1% от ATR  СУПЕР РЕШЕНИЕ!!!
+if(PriceReachedThreshold && MathAbs(Bid - SellPrice) <= deviation)
+     {
+      double StopLoss_Level = Bid + ATR * (StopLoss_ATR_Multiplier/100);
+      double TakeProfit_Level = Bid - ATR * (TakeProfit_ATR_Multiplier/100);
+      double FreeMargin = AccountFreeMargin();
+      double OneLotMarginRequired = MarketInfo(Symbol(), MODE_MARGINREQUIRED);
+      double LotStep = MarketInfo(Symbol(), MODE_LOTSTEP);
+      double LotSize = MathFloor(FreeMargin * Risk_Percent / 100.0 / OneLotMarginRequired / LotStep) * LotStep;
+
+      // Check if lot size is less than minimum allowed
+      double MinLot = MarketInfo(Symbol(), MODE_MINLOT);
+      if(LotSize < MinLot)
+        {
+         Alert(" Не хватает денег на ", MinLot," лотов");
+         return;
+        }
+
+      // Place order with StopLoss and TakeProfit
+      int orderType = FirstOrderClosed ? OP_SELLSTOP : OP_SELL;
+      int ticket = OrderSend(Symbol(), orderType, LotSize, SellPrice, 3, StopLoss_Level, TakeProfit_Level, "My order", MagicNumber);
+      if(ticket < 0)
+        {
+         Print("OrderSend failed with error #", GetLastError());
+        }
+      else
+        {
+         // Увеличиваем счетчик только при успешном открытии ордера
+         EntryCount++;
+         // Создаем ценовую метку на уровне пробоя
+         if(EntryCount == 1) // Только для первого ордера
+           {
+            string labelName = "BreakoutLevel_" + TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS);
+            ObjectCreate(0, labelName, OBJ_TEXT, 0, Time[1], SellThreshold);
+            ObjectSetText(labelName, "Пробой " + DoubleToString(ATR_Percent, 2) + "%", 10, "Arial", clrRed);
+            ObjectSet(labelName, OBJPROP_CORNER, 1); // Устанавливаем метку в левый верхний угол
+            ObjectSet(labelName, OBJPROP_XDISTANCE, 5); // Устанавливаем горизонтальное расстояние
+                        // Устанавливаем вертикальное расстояние
+            ObjectSet(labelName, OBJPROP_YDISTANCE, 20); 
+           }
+        }
+      // Reset the threshold flag
+      PriceReachedThreshold = false;
+      // Mark that an order has been opened at the specified price
+      OrderOpenedAtSellPrice = true;
+     }
+   else if(iClose(Symbol(), UserTimeframe, 1) > BuyPrice && MathAbs(Ask - BuyPrice) <= deviation && EntryCount > 0)
+     {
+      double StopLoss_Level = Ask - ATR * (StopLoss_ATR_Multiplier/100);
+      double TakeProfit_Level = Ask + ATR * (TakeProfit_ATR_Multiplier/100);
+      double FreeMargin = AccountFreeMargin();
+      double OneLotMarginRequired = MarketInfo(Symbol(), MODE_MARGINREQUIRED);
+      double LotStep = MarketInfo(Symbol(), MODE_LOTSTEP);
+      double LotSize = MathFloor(FreeMargin * Risk_Percent / 100.0 / OneLotMarginRequired / LotStep) * LotStep;
+
+      // Check if lot size is less than minimum allowed
+      double MinLot = MarketInfo(Symbol(), MODE_MINLOT);
+      if(LotSize < MinLot)
+        {
+         Alert(" Не хватает денег на ", MinLot," лотов");
+         return;
+        }
+
+      // Place order with StopLoss and TakeProfit
+      int orderType = OP_BUY;
+      int ticket = OrderSend(Symbol(), orderType, LotSize, BuyPrice, 3, StopLoss_Level, TakeProfit_Level, "My order", MagicNumber);
+      if(ticket < 0)
+        {
+         Print("OrderSend failed with error #", GetLastError());
+        }
+      else
+        {
+         // Увеличиваем счетчик только при успешном открытии ордера
+         EntryCount++;
+        }
+     }
+  }
